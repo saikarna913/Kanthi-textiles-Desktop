@@ -1,0 +1,43 @@
+# Node
+node_modules/
+pnpm-lock.yaml
+yarn.lock
+package-lock.json
+
+# Build output
+build/
+dist/
+
+# Electron
+*.asar
+*.log
+*.tmp
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE / Editor
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+
+# Local environment
+.env
+.env.*
+
+# Debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# Temporary
+tmp/
+temp/
+
+# Better SQLite3 database files
+*.db

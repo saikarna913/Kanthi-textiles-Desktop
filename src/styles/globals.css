@@ -1,0 +1,123 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── DARK THEME (default) ── */
+:root, [data-theme="dark"] {
+  --bg-primary: #0B0F1A;
+  --bg-secondary: #111827;
+  --bg-card: #1A2235;
+  --bg-hover: #1E2A3B;
+  --bg-input: #1A2235;
+  --border: rgba(45,58,82,0.7);
+  --border-hover: rgba(45,58,82,1);
+  --text-primary: #F1F5F9;
+  --text-secondary: #94A3B8;
+  --text-muted: #64748B;
+  --accent: #14B8A6;
+  --accent-light: #2DD4BF;
+  --accent-bg: rgba(20,184,166,0.12);
+  --accent-border: rgba(20,184,166,0.25);
+  --gold: #F59E0B;
+  --gold-bg: rgba(245,158,11,0.12);
+  --success: #10B981;
+  --success-bg: rgba(16,185,129,0.12);
+  --warning: #F59E0B;
+  --warning-bg: rgba(245,158,11,0.12);
+  --danger: #EF4444;
+  --danger-bg: rgba(239,68,68,0.12);
+  --info: #3B82F6;
+  --info-bg: rgba(59,130,246,0.12);
+  --shadow: 0 4px 24px rgba(0,0,0,0.35);
+  --shadow-lg: 0 8px 40px rgba(0,0,0,0.45);
+  --scrollbar-thumb: #2D3A52;
+  --scrollbar-track: #111827;
+  --chart-grid: #1E2A3B;
+  --chart-tooltip-bg: #1A2235;
+}
+
+/* ── LIGHT THEME ── */
+[data-theme="light"] {
+  --bg-primary: #F0F4F8;
+  --bg-secondary: #FFFFFF;
+  --bg-card: #FFFFFF;
+  --bg-hover: #F8FAFC;
+  --bg-input: #F8FAFC;
+  --border: rgba(203,213,225,0.8);
+  --border-hover: rgba(148,163,184,0.8);
+  --text-primary: #0F172A;
+  --text-secondary: #475569;
+  --text-muted: #94A3B8;
+  --accent: #0D9488;
+  --accent-light: #14B8A6;
+  --accent-bg: rgba(13,148,136,0.08);
+  --accent-border: rgba(13,148,136,0.3);
+  --gold: #D97706;
+  --gold-bg: rgba(217,119,6,0.08);
+  --success: #059669;
+  --success-bg: rgba(5,150,105,0.08);
+  --warning: #D97706;
+  --warning-bg: rgba(217,119,6,0.08);
+  --danger: #DC2626;
+  --danger-bg: rgba(220,38,38,0.08);
+  --info: #2563EB;
+  --info-bg: rgba(37,99,235,0.08);
+  --shadow: 0 4px 24px rgba(0,0,0,0.08);
+  --shadow-lg: 0 8px 40px rgba(0,0,0,0.12);
+  --scrollbar-thumb: #CBD5E1;
+  --scrollbar-track: #F1F5F9;
+  --chart-grid: #E2E8F0;
+  --chart-tooltip-bg: #FFFFFF;
+}
+
+*{box-sizing:border-box;margin:0;padding:0}
+html,body,#root{height:100%;width:100%;overflow:hidden}
+body{
+  font-family:'Plus Jakarta Sans',-apple-system,sans-serif;
+  background:var(--bg-primary);color:var(--text-primary);
+  -webkit-font-smoothing:antialiased;user-select:none;
+  transition:background 0.2s,color 0.2s;
+}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:var(--scrollbar-track)}
+::-webkit-scrollbar-thumb{background:var(--scrollbar-scrollbar-thumb, var(--scrollbar-thumb));border-radius:3px}
+
+@keyframes fadeInUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+@keyframes pulse-ring{0%,100%{box-shadow:0 0 0 0 rgba(20,184,166,.3)}50%{box-shadow:0 0 0 6px rgba(20,184,166,0)}}
+
+.animate-fade-in-up{animation:fadeInUp .35s ease forwards}
+.animate-fade-in{animation:fadeIn .25s ease forwards}
+.animate-pulse-ring{animation:pulse-ring 2s infinite}
+
+.stagger > *:nth-child(1){animation-delay:0ms;opacity:0}
+.stagger > *:nth-child(2){animation-delay:60ms;opacity:0}
+.stagger > *:nth-child(3){animation-delay:120ms;opacity:0}
+.stagger > *:nth-child(4){animation-delay:180ms;opacity:0}
+.stagger > *:nth-child(5){animation-delay:240ms;opacity:0}
+.stagger > *:nth-child(6){animation-delay:300ms;opacity:0}
+
+.skeleton{
+  background:linear-gradient(90deg,var(--bg-card) 25%,var(--bg-hover) 50%,var(--bg-card) 75%);
+  background-size:200% 100%;
+  animation:shimmer 1.4s infinite;
+  border-radius:6px;
+}
+
+.title-bar-drag{-webkit-app-region:drag}
+.title-bar-no-drag{-webkit-app-region:no-drag}
+.scroll-area{overflow-y:auto;overflow-x:hidden}
+.font-num{font-family:'JetBrains Mono',monospace;font-variant-numeric:tabular-nums}
+
+/* Recharts overrides */
+.recharts-default-tooltip{
+  background:var(--chart-tooltip-bg)!important;
+  border:1px solid var(--border)!important;
+  border-radius:10px!important;
+  color:var(--text-primary)!important;
+}
+.recharts-tooltip-wrapper{z-index:50!important}
+.recharts-cartesian-grid-horizontal line,
+.recharts-cartesian-grid-vertical line{stroke:var(--chart-grid)!important}
