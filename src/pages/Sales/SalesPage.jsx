@@ -39,8 +39,9 @@ export default function SalesPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await window.electron.db.getSalesData({ page, limit, search, category, region, sortBy, sortDir, dateFrom, dateTo });
-      setData(r.rows||[]); setTotal(r.total||0);
+      const r = await window.electron.db.getSalesData({ page, limit, search, category, region, sortBy, sortDir, dateFrom, dateTo }) || {};
+      setData(r.rows || []);
+      setTotal(r.total || 0);
     } catch(e) { toast.error('Failed to load'); }
     setLoading(false);
   }, [page, limit, search, category, region, sortBy, sortDir, dateFrom, dateTo]);
@@ -66,11 +67,11 @@ export default function SalesPage() {
 
   const handleExport = async () => {
     toast.loading('Preparing export...', {id:'exp'});
-    const all = await window.electron.db.getSalesData({ page:1, limit:99999, search, category, region, sortBy, sortDir, dateFrom, dateTo });
+    const all = await window.electron.db.getSalesData({ page:1, limit:99999, search, category, region, sortBy, sortDir, dateFrom, dateTo }) || {};
     toast.dismiss('exp');
     const cols = COLUMNS.map(c=>({key:c.key,header:c.header,width:Math.round(c.w/7)}));
-    const r = await window.electron.excel.exportData({ data:all.rows, columns:cols, filename:`kanthi_sales_${new Date().toISOString().split('T')[0]}.xlsx` });
-    if (r?.success) toast.success(`Exported ${r.rows} records`);
+    const r = await window.electron.excel.exportData({ data: all.rows || [], columns: cols, filename:`kanthi_sales_${new Date().toISOString().split('T')[0]}.xlsx` });
+    if (r?.success) toast.success(`Exported ${r.rows ?? 0} records`);
     else if (r) toast.error('Export failed');
   };
 

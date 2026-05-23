@@ -158,4 +158,10 @@ export default function Dashboard() {
               <YAxis tick={{fill:'var(--text-muted)',fontSize:10}} tickLine={false} axisLine={false} width={35}/>
               <Tooltip contentStyle={{background:'var(--chart-tooltip-bg)',border:'1px solid var(--border)',borderRadius:10,fontSize:11}} labelStyle={{color:'var(--text-secondary)'}} itemStyle={{color:'var(--text-primary)'}}/>
               <Bar dataKey="orders" name="Orders" fill="#3B82F6" radius={[4,4,0,0]}/>
-       
+            </BarChart>
+          </ResponsiveContainer>
+        </Card>
+      </div>
+    </div>
+  );
+}

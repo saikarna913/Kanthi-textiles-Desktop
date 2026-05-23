@@ -191,8 +191,10 @@ export default function InventoryPage() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const r = await window.electron.db.getInventory({ search, category, lowStock: lowStockOnly, page:1, limit:500 });
-    setData(r.rows||[]); setTotal(r.total||0); setLoading(false);
+    const r = await window.electron.db.getInventory({ search, category, lowStock: lowStockOnly, page:1, limit:500 }) || {};
+    setData(r.rows || []);
+    setTotal(r.total || 0);
+    setLoading(false);
   }, [search, category, lowStockOnly]);
 
   useEffect(() => { load(); }, [load]);

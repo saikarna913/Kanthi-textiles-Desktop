@@ -186,7 +186,7 @@ export default function CustomersPage() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const r = await window.electron.db.getCustomers({ page, limit: 50, search, type });
+    const r = await window.electron.db.getCustomers({ page, limit: 50, search, type }) || {};
     setCustomers(r.rows || []);
     setTotal(r.total || 0);
     setLoading(false);

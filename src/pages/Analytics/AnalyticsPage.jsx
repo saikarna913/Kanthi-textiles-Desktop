@@ -25,13 +25,15 @@ function TimeSeriesTab() {
   useEffect(() => {
     setLoading(true);
     window.electron.db.getTimeSeries({ granularity, metric, months:24 })
-      .then(d=>{ setData(d); setLoading(false); });
+      .then(d=>{ setData(Array.isArray(d) ? d : []); setLoading(false); })
+      .catch(() => { setData([]); setLoading(false); });
   }, [granularity, metric]);
 
-  const peak = data.reduce((mx,d)=>d.value>mx.value?d:mx, {value:0,period:'—'});
-  const avg = data.length ? data.reduce((s,d)=>s+d.value,0)/data.length : 0;
-  const trend = data.length>1 && data[data.length-1]?.value > data[0]?.value ? '↑ Growing' : '↓ Declining';
-  const trendColor = data.length>1 && data[data.length-1]?.value > data[0]?.value ? 'var(--success)' : 'var(--danger)';
+  const safeTimeSeries = Array.isArray(data) ? data : [];
+  const peak = safeTimeSeries.reduce((mx,d)=>d.value>mx.value?d:mx, {value:0,period:'—'});
+  const avg = safeTimeSeries.length ? safeTimeSeries.reduce((s,d)=>s+d.value,0)/safeTimeSeries.length : 0;
+  const trend = safeTimeSeries.length>1 && safeTimeSeries[safeTimeSeries.length-1]?.value > safeTimeSeries[0]?.value ? '↑ Growing' : '↓ Declining';
+  const trendColor = safeTimeSeries.length>1 && safeTimeSeries[safeTimeSeries.length-1]?.value > safeTimeSeries[0]?.value ? 'var(--success)' : 'var(--danger)';
 
   return (
     <div style={{display:'flex',flexDirection:'column',gap:14}}>
@@ -176,13 +178,17 @@ function AnomalyTab() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    window.electron.db.getAnomalies().then(d=>{ setAnomalies(d); setLoading(false); });
+    window.electron.db.getAnomalies()
+      .then(d => { setAnomalies(Array.isArray(d) ? d : []); setLoading(false); })
+      .catch(() => { setAnomalies([]); setLoading(false); });
   }, []);
+
+  const safeAnomalies = Array.isArray(anomalies) ? anomalies : [];
 
   return (
     <div style={{display:'flex',flexDirection:'column',gap:14}}>
       <div style={{display:'flex',gap:10,flexWrap:'wrap',alignItems:'center'}}>
-        <Badge variant={anomalies.length>5?'danger':'warning'}>{anomalies.length} anomalies detected</Badge>
+        <Badge variant={safeAnomalies.length>5?'danger':'warning'}>{safeAnomalies.length} anomalies detected</Badge>
         <Badge variant="info">Z-score threshold: |z| &gt; 2.0</Badge>
       </div>
 
@@ -208,9 +214,9 @@ function AnomalyTab() {
           {loading ? <div className="skeleton" style={{height:60}}/> : (
             <div style={{display:'flex',flexDirection:'column',gap:8}}>
               {[
-                {label:'High outliers (z > 2)', value:anomalies.filter(a=>a.zScore>0).length, color:'var(--danger)'},
-                {label:'Low outliers (z < −2)', value:anomalies.filter(a=>a.zScore<0).length, color:'var(--info)'},
-                {label:'Max |z-score|', value:Math.max(...anomalies.map(a=>Math.abs(a.zScore)),0).toFixed(2), color:'var(--gold)'},
+                {label:'High outliers (z > 2)', value:safeAnomalies.filter(a=>a.zScore>0).length, color:'var(--danger)'},
+                {label:'Low outliers (z < −2)', value:safeAnomalies.filter(a=>a.zScore<0).length, color:'var(--info)'},
+                {label:'Max |z-score|', value:Math.max(...safeAnomalies.map(a=>Math.abs(a.zScore)),0).toFixed(2), color:'var(--gold)'},
               ].map(s=>(
                 <div key={s.label} style={{display:'flex',justifyContent:'space-between',fontSize:12}}>
                   <span style={{color:'var(--text-secondary)'}}>{s.label}</span>
@@ -222,7 +228,7 @@ function AnomalyTab() {
         </Card>
       </div>
 
-      {!loading && anomalies.length > 0 && (
+      {!loading && safeAnomalies.length > 0 && (
         <Card>
           <h3 style={{fontSize:13,fontWeight:700,color:'var(--text-primary)',marginBottom:12}}>Detected Anomalies</h3>
           <div style={{overflowY:'auto',maxHeight:320}}>
@@ -233,7 +239,7 @@ function AnomalyTab() {
                 </tr>
               </thead>
               <tbody>
-                {anomalies.map(a=>(
+                {safeAnomalies.map(a=>(
                   <tr key={a.day} style={{borderBottom:'1px solid var(--border)'}} onMouseEnter={e=>e.currentTarget.style.background='var(--bg-hover)'} onMouseLeave={e=>e.currentTarget.style.background=''}>
                     <td style={{padding:'8px 12px',color:'var(--text-primary)'}}>{a.day}</td>
                     <td style={{padding:'8px 12px',fontFamily:'monospace',color:'var(--text-primary)',fontWeight:600}}>{fmt(a.sales)}</td>
@@ -257,7 +263,7 @@ function CategoryTab() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    window.electron.db.getCategoryAnalysis().then(d=>{ setData(d); setLoading(false); });
+    window.electron.db.getCategoryAnalysis().then(d=>{ setData(Array.isArray(d) ? d : []); setLoading(false); });
   }, []);
 
   const radarData = data.slice(0,6).map(d=>({
@@ -338,7 +344,7 @@ function RegionTab() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    window.electron.db.getRegionAnalysis().then(d=>{ setData(d); setLoading(false); });
+    window.electron.db.getRegionAnalysis().then(d=>{ setData(Array.isArray(d) ? d : []); setLoading(false); });
   }, []);
 
   return (
@@ -401,7 +407,7 @@ function CustomerAnalyticsTab() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    window.electron.db.getCustomerAnalytics().then(d=>{ setData(d); setLoading(false); });
+    window.electron.db.getCustomerAnalytics().then(d=>{ setData(Array.isArray(d) ? d : []); setLoading(false); });
   }, []);
 
   const top = data.slice(0,10);

@@ -105,7 +105,7 @@ function TableViewer({ table, onBack }) {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const r = await window.electron.db.getDynamicTableData(table.table_name, { page, limit: 100, search });
+    const r = await window.electron.db.getDynamicTableData(table.table_name, { page, limit: 100, search }) || {};
     setRows(r.rows || []);
     setTotal(r.total || 0);
     setLoading(false);
@@ -127,9 +127,9 @@ function TableViewer({ table, onBack }) {
   };
 
   const handleExport = async () => {
-    const allData = await window.electron.db.getDynamicTableData(table.table_name, { page: 1, limit: 9999 });
-    const cols = [...(allData.columns || table.columns).map(c => ({ key: c.name, header: c.name.replace(/_/g, ' ').toUpperCase(), width: 18 }))];
-    await window.electron.excel.exportData({ data: allData.rows, columns: cols, filename: `${table.display_name}_${new Date().toISOString().split('T')[0]}.xlsx` });
+    const allData = await window.electron.db.getDynamicTableData(table.table_name, { page: 1, limit: 9999 }) || {};
+    const cols = [...((allData.columns || table.columns) || []).map(c => ({ key: c.name, header: c.name.replace(/_/g, ' ').toUpperCase(), width: 18 }))];
+    await window.electron.excel.exportData({ data: allData.rows || [], columns: cols, filename: `${table.display_name}_${new Date().toISOString().split('T')[0]}.xlsx` });
     toast.success('Exported!');
   };
 
