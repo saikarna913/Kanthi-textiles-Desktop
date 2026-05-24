@@ -1,5 +1,4 @@
-import React, { useState, useCallback } from 'react';
-import { useDropzone } from 'react-dropzone';
+import React, { useState, useCallback, useEffect } from 'react';
 import { Upload, FileSpreadsheet, CheckCircle2, AlertCircle, ArrowRight, X, RefreshCw, Package } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { Card, Badge, Button, PageHeader } from '../../components/ui/index';
@@ -26,6 +25,30 @@ export default function ImportPage() {
   const [parseResult, setParseResult] = useState(null);
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState(null);
+  const [electronReady, setElectronReady] = useState(false);
+  const [dragActive, setDragActive] = useState(false);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.electron) {
+      console.log('✓ Electron API available');
+      // Test the connection
+      if (window.electron.excel?.test) {
+        window.electron.excel.test().then(r => {
+          console.log('✓ Test handler response:', r);
+          setElectronReady(r?.success ?? true);
+        }).catch(e => {
+          console.error('✗ Test handler failed:', e);
+          setElectronReady(false);
+        });
+      } else {
+        setElectronReady(true);
+      }
+    } else {
+      console.error('✗ Electron API not available!');
+      toast.error('Electron API not loaded');
+      setElectronReady(false);
+    }
+  }, []);
 
   const processFile = async (path, fname) => {
     setFilePath(path); setFileName(fname);
@@ -33,60 +56,115 @@ export default function ImportPage() {
   };
 
   const handleFileSelect = async () => {
-    const path = await window.electron.excel.openFileDialog();
-    if (!path) return;
-    const name = path.split('\\').pop().split('/').pop();
-    processFile(path, name);
+    try {
+      console.log('[FRONTEND] Click: Browse File button');
+      if (!window.electron?.excel?.openFileDialog) {
+        console.error('[FRONTEND] ✗ openFileDialog not available!');
+        toast.error('File dialog not available');
+        return;
+      }
+      console.log('[FRONTEND] ✓ Calling openFileDialog...');
+      const path = await window.electron.excel.openFileDialog();
+      console.log('[FRONTEND] ✓ Dialog returned:', path ? 'FILE SELECTED' : 'NO FILE');
+      
+      if (!path) {
+        console.log('[FRONTEND] User cancelled or no file selected');
+        return;
+      }
+      
+      const name = path.split('\\').pop().split('/').pop();
+      console.log('[FRONTEND] ✓ File selected:', name, 'Full path:', path);
+      processFile(path, name);
+      toast.success(`File selected: ${name}`);
+    } catch(e) {
+      console.error('[FRONTEND] ✗ Error:', e.message);
+      console.error('[FRONTEND] Stack:', e.stack);
+      toast.error(`Failed to open file dialog: ${e.message}`);
+    }
   };
 
-  const onDrop = useCallback(async (files) => {
-    if (!files.length) return;
-    const f = files[0];
-    if (f.path) processFile(f.path, f.name);
-    else toast.error('Use "Browse File" button in Electron mode');
+  const handleDragOver = useCallback((event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setDragActive(true);
   }, []);
 
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
-    onDrop,
-    accept: { 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'], 'application/vnd.ms-excel': ['.xls'], 'text/csv': ['.csv'] },
-    maxFiles: 1,
-  });
+  const handleDragLeave = useCallback((event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setDragActive(false);
+  }, []);
+
+  const handleDrop = useCallback((event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setDragActive(false);
+
+    const files = Array.from(event.dataTransfer?.files || []);
+    if (!files.length) return;
+
+    const file = files[0];
+    if (file?.path) {
+      processFile(file.path, file.name);
+      toast.success(`File selected: ${file.name}`);
+    } else {
+      toast.error('Drop a file from the OS file explorer');
+    }
+  }, []);
 
   const handleParse = async () => {
     toast.loading('Parsing file...', { id:'parse' });
     try {
+      console.log(`Parsing ${importType} file: ${filePath}`);
       let result;
       if (importType === 'stock') {
         result = await window.electron.excel.parseStockRegister(filePath);
       } else {
         result = await window.electron.excel.parseFile(filePath);
       }
+      console.log('Parse result:', result);
       toast.dismiss('parse');
-      if (!result.success) { toast.error(result.error); return; }
+      if (!result.success) { 
+        toast.error(result.error || 'Failed to parse file'); 
+        return; 
+      }
       setParseResult(result);
       setStep(2);
       toast.success(`Parsed ${result.totalRows} rows`);
     } catch(e) {
+      console.error('Parse error:', e);
       toast.dismiss('parse');
       toast.error('Parse error: ' + e.message);
     }
   };
 
   const handleImport = async () => {
-    if (!parseResult?.records?.length) return;
+    if (!parseResult?.records?.length) {
+      toast.error('No records to import');
+      return;
+    }
     setImporting(true);
     try {
+      console.log(`Importing ${parseResult.records.length} ${importType} records...`);
       let result;
       if (importType === 'stock') {
         result = await window.electron.db.importStockRegister(parseResult.records, parseResult.monthYear);
       } else {
         result = await window.electron.db.insertSales(parseResult.records);
       }
+      console.log('Import result:', result);
+      if (!result?.success && result?.error) {
+        toast.error(`Import failed: ${result.error}`);
+        setImporting(false);
+        return;
+      }
       setImportResult(result);
       setStep(3);
-      toast.success(`${importType==='stock'?'Stock register':'Sales data'} imported!`);
+      const imported = result?.inserted || result?.upserted || parseResult.records.length;
+      toast.success(`${imported} ${importType==='stock'?'items':'records'} imported successfully!`);
     } catch(e) {
-      toast.error('Import failed: ' + e.message);
+      console.error('Import error:', e);
+      toast.error(`Import failed: ${e.message}`);
     }
     setImporting(false);
   };
@@ -94,9 +172,13 @@ export default function ImportPage() {
   const reset = () => { setStep(0); setFilePath(''); setFileName(''); setImportType(''); setParseResult(null); setImportResult(null); };
 
   const dropSt = {
-    border: `2px dashed ${isDragActive?'var(--accent)':'var(--border)'}`,
-    background: isDragActive ? 'var(--accent-bg)' : 'var(--bg-hover)',
-    borderRadius: 16, padding: '36px 24px', textAlign: 'center', cursor: 'pointer', transition: 'all .2s',
+    border: `2px dashed ${dragActive ? 'var(--accent)' : 'var(--border)'}`,
+    background: dragActive ? 'var(--accent-bg)' : 'var(--bg-hover)',
+    borderRadius: 16,
+    padding: '36px 24px',
+    textAlign: 'center',
+    cursor: 'pointer',
+    transition: 'all .2s',
   };
 
   return (
@@ -123,19 +205,18 @@ export default function ImportPage() {
       {step===0 && (
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:20,maxWidth:820}}>
           <div>
-            <div {...getRootProps()} style={dropSt}>
-              <input {...getInputProps()}/>
+            <div onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop} style={dropSt}>
               <div style={{width:56,height:56,background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:14,display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 14px'}}>
                 <FileSpreadsheet size={26} style={{color:'var(--success)'}}/>
               </div>
               <p style={{fontSize:14,fontWeight:700,color:'var(--text-primary)',marginBottom:4}}>
-                {isDragActive?'Drop file here...':'Drag & drop Excel file'}
+                {dragActive ? 'Drop file here...' : 'Drag & drop Excel or CSV file'}
               </p>
               <p style={{fontSize:12,color:'var(--text-muted)',marginBottom:16}}>Supports .xlsx, .xls, .csv</p>
-              <button onClick={e=>{e.stopPropagation();handleFileSelect();}} style={{background:'var(--accent)',color:'white',border:'none',borderRadius:10,padding:'8px 20px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>
-                Browse File
-              </button>
             </div>
+            <button type="button" onClick={handleFileSelect} disabled={!electronReady} style={{marginTop:16,background:electronReady?'var(--accent)':'var(--text-muted)',color:'white',border:'none',borderRadius:10,padding:'8px 20px',fontSize:13,fontWeight:600,cursor:electronReady?'pointer':'not-allowed',fontFamily:'inherit',opacity:electronReady?1:0.6}}>
+              {electronReady ? 'Browse File' : 'Electron not ready'}
+            </button>
           </div>
 
           <div style={{display:'flex',flexDirection:'column',gap:14}}>

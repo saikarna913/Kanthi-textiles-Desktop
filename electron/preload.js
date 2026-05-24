@@ -46,6 +46,7 @@ contextBridge.exposeInMainWorld('electron', {
     seedDemoData: () => invoke('db:seedDemoData'),
   },
   excel: {
+    test: () => invoke('excel:test'),
     openFileDialog: () => invoke('excel:openFileDialog'),
     parseFile: (p) => invoke('excel:parseFile', p),
     parseStockRegister: (p) => invoke('excel:parseStockRegister', p),

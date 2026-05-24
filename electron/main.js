@@ -25,6 +25,7 @@ function loadServices() {
 let mainWindow;
 
 function createWindow() {
+  console.log('Creating main window...');
   mainWindow = new BrowserWindow({
     width: 1440, height: 900, minWidth: 1100, minHeight: 700,
     frame: false, backgroundColor: '#0F1117',
@@ -35,12 +36,35 @@ function createWindow() {
     show: false,
   });
   const startURL = isDev ? 'http://localhost:3000' : `file://${path.join(__dirname, '../build/index.html')}`;
+  console.log('Loading URL:', startURL);
   mainWindow.loadURL(startURL);
-  mainWindow.once('ready-to-show', () => { mainWindow.show(); });
-  mainWindow.on('closed', () => { mainWindow = null; });
+  mainWindow.webContents.once('did-finish-load', () => {
+    console.log('Window finished loading content');
+  });
+  mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    console.error('[WINDOW] did-fail-load', { errorCode, errorDescription, validatedURL, isMainFrame });
+  });
+  mainWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
+    console.log('[RENDERER]', { level, message, line, sourceId });
+  });
+  if (isDev) {
+    mainWindow.webContents.openDevTools();
+  }
+  mainWindow.once('ready-to-show', () => { 
+    console.log('Window ready-to-show, displaying...');
+    mainWindow.show(); 
+  });
+  mainWindow.on('closed', () => { 
+    console.log('Window closed');
+    mainWindow = null; 
+  });
 }
 
-app.whenReady().then(() => { loadServices(); createWindow(); });
+app.whenReady().then(() => { 
+  loadServices(); 
+  createWindow();
+  console.log('App ready, mainWindow created');
+});
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 
 // Window controls
@@ -88,9 +112,56 @@ dbHandler('db:getSeedStatus', () => dbService.getSeedStatus());
 dbHandler('db:seedDemoData', () => dbService.seedDemoData());
 
 // Excel handlers
+ipcMain.handle('excel:test', async (event) => {
+  console.log('[TEST] 1. Handler invoked');
+  try {
+    console.log('[TEST] 2. In try block');
+    console.log('[TEST] 3. mainWindow check:', mainWindow ? 'EXISTS' : 'NULL');
+    console.log('[TEST] 4. isDev =', isDev);
+    console.log('[TEST] 5. Building result object');
+    const result = { success: true, mainWindow: !!mainWindow, isDev };
+    console.log('[TEST] 6. Result object created:', result);
+    console.log('[TEST] 7. About to return');
+    return result;
+  } catch(e) {
+    console.error('[TEST] ERROR - caught exception:', e.message);
+    console.error('[TEST] ERROR - stack:', e.stack);
+    return null;
+  }
+});
+
 ipcMain.handle('excel:openFileDialog', async () => {
-  const r = await dialog.showOpenDialog(mainWindow, { title:'Select File', filters:[{name:'Excel/CSV',extensions:['xlsx','xls','csv']}], properties:['openFile'] });
-  return r.canceled ? null : r.filePaths[0];
+  try {
+    console.log('[DIALOG] Starting file dialog...');
+    console.log('[DIALOG] mainWindow is:', mainWindow ? 'READY' : 'NULL');
+    
+    if (!mainWindow) {
+      console.error('[DIALOG] ERROR: mainWindow is null!');
+      return null;
+    }
+
+    console.log('[DIALOG] Calling dialog.showOpenDialog...');
+    const r = await dialog.showOpenDialog(mainWindow, { 
+      title: 'Select Excel File', 
+      filters: [
+        { name: 'Excel Files', extensions: ['xlsx', 'xls'] },
+        { name: 'CSV Files', extensions: ['csv'] },
+        { name: 'All Files', extensions: ['*'] }
+      ], 
+      properties: ['openFile'] 
+    });
+    
+    console.log('[DIALOG] Dialog returned - canceled:', r.canceled, 'files:', r.filePaths.length);
+    if (r.filePaths.length > 0) {
+      console.log('[DIALOG] Selected file:', r.filePaths[0]);
+    }
+    
+    return r.canceled ? null : r.filePaths[0];
+  } catch(e) {
+    console.error('[DIALOG] ERROR:', e.message);
+    console.error('[DIALOG] Stack:', e.stack);
+    return null;
+  }
 });
 ipcMain.handle('excel:parseFile', async (_, filePath) => excelService.parseFile(filePath));
 ipcMain.handle('excel:parseStockRegister', async (_, filePath) => excelService.parseStockRegister(filePath));

@@ -219,6 +219,9 @@ module.exports = function createDatabase(appDataPath) {
   }
 
   function insertSales(records) {
+    if (!Array.isArray(records) || !records.length) {
+      return { success: false, error: 'No records provided' };
+    }
     const stmt = db.prepare(`
       INSERT INTO sales (invoice_no,date,customer_name,customer_type,region,state,city,
         product_name,category,sub_category,sku,quantity,unit_price,discount,total_amount,
@@ -228,8 +231,9 @@ module.exports = function createDatabase(appDataPath) {
         @cost_price,@profit,@payment_mode,@sales_rep,@notes)
     `);
     const insertMany = db.transaction((rows) => {
-      let count = 0;
-      for (const row of rows) {
+      let count = 0, errors = [];
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
         try {
           stmt.run({
             invoice_no: row.invoice_no||row['Invoice No']||'',
@@ -253,12 +257,19 @@ module.exports = function createDatabase(appDataPath) {
             notes: row.notes||row['Notes']||''
           });
           count++;
-        } catch(e) { console.error('row insert error:', e.message); }
+        } catch(e) { 
+          console.error(`Row ${i+1} insert error:`, e.message, 'data:', row);
+          errors.push(`Row ${i+1}: ${e.message}`);
+        }
       }
-      return count;
+      return { count, errors };
     });
-    const count = insertMany(records);
-    return { success: true, inserted: count };
+    const result = insertMany(records);
+    if (result.count === 0) {
+      return { success: false, error: `Failed to insert records. ${result.errors.slice(0, 3).join('; ')}` };
+    }
+    console.log(`Inserted ${result.count}/${records.length} sales records. Errors: ${result.errors.length}`);
+    return { success: true, inserted: result.count, errors: result.errors.length > 0 ? result.errors : undefined };
   }
 
   function normalizeDate(d) {
