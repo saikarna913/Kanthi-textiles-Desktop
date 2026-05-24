@@ -34,46 +34,113 @@ function parseFile(filePath) {
   } catch(e) { return { success:false, error:e.message }; }
 }
 
-// Parse your exact stock register format (Month header, S.NO, STOCK ITEMS, TOTAL)
-function parseStockRegister(filePath) {
+// Parse your exact sales-by-month workbook format: each sheet is a month, each sheet has Month header, S.NO, STOCK ITEMS, TOTAL
+function parseSalesByMonth(filePath) {
   try {
     const wb = XLSX.readFile(filePath, { raw:true });
-    const sheet = wb.Sheets[wb.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json(sheet, { header:1, raw:true, defval:'' });
-
-    let monthYear = '';
-    let currentCategory = '';
+    const sheetSummaries = [];
     const records = [];
 
-    for (const row of rows) {
-      const cols = row.map(c => String(c||'').trim());
-      // Detect month header line like "OCTOBER-24"
-      if (cols[0] && /^[A-Z]+[-–][0-9]{2,4}$/.test(cols[0].toUpperCase())) {
-        monthYear = cols[0];
-        continue;
-      }
-      // Detect category line (S.NO empty, no TOTAL number, bold text in col 1)
-      const sno = cols[0];
-      const itemName = cols[1] || cols[0];
-      const total = cols[2] !== undefined ? cols[2] : '';
+    const monthNameMap = {
+      JAN:0,FEB:1,MAR:2,APR:3,MAY:4,JUN:5,JUL:6,AUG:7,SEP:8,OCT:9,NOV:10,DEC:11,
+      JANUARY:0,FEBRUARY:1,MARCH:2,APRIL:3,MAY:4,JUNE:5,JULY:6,AUGUST:7,SEPTEMBER:8,OCTOBER:9,NOVEMBER:10,DECEMBER:11,
+    };
 
-      if (!sno && itemName && (total === '' || isNaN(parseFloat(total)))) {
-        currentCategory = itemName.trim();
-        continue;
-      }
-      if (sno && !isNaN(parseInt(sno)) && itemName) {
-        const qty = parseFloat(String(total).replace(/[,\s]/g,''));
-        if (!isNaN(qty) || total === '0') {
-          records.push({
-            product_name: itemName.trim(),
-            category: currentCategory,
-            current_stock: isNaN(qty) ? 0 : qty,
-            unit: 'pcs',
-          });
+    const normalizeMonthYear = (text) => {
+      if (!text) return null;
+      const trimmed = String(text||'').trim().toUpperCase().replace(/\s+/g,' ');
+      const direct = trimmed.replace('–','-').replace('\u2013','-').replace('\u2014','-');
+      const parts = direct.split(/[- ]+/).filter(Boolean);
+      if (parts.length >= 2) {
+        const year = parts[parts.length-1];
+        const monthPart = parts.slice(0, parts.length-1).join(' ');
+        const monthKey = monthPart.substring(0, 3);
+        const month = monthNameMap[monthPart] ?? monthNameMap[monthKey];
+        if (month !== undefined && /^\d{2,4}$/.test(year)) {
+          const fullYear = year.length === 2 ? 2000 + parseInt(year, 10) : parseInt(year, 10);
+          return `${monthPart.charAt(0)+monthPart.slice(1).toLowerCase()}-${fullYear}`;
         }
       }
-    }
-    return { success:true, records, monthYear, totalRows:records.length, preview:records.slice(0,10) };
+      if (monthNameMap[trimmed] !== undefined) {
+        return `${trimmed.charAt(0)+trimmed.slice(1).toLowerCase()}-${new Date().getFullYear()}`;
+      }
+      return null;
+    };
+
+    const parseSheet = (sheetName) => {
+      const sheet = wb.Sheets[sheetName];
+      const rows = XLSX.utils.sheet_to_json(sheet, { header:1, raw:true, defval:'' });
+      let monthYear = normalizeMonthYear(sheetName);
+      let currentCategory = '';
+      const sheetRecords = [];
+      const warnings = [];
+
+      for (const row of rows) {
+        const cols = row.map(c => String(c||'').trim());
+        if (!monthYear && cols[0] && /^[A-Z][A-Z ]+[ -–—]?[0-9]{2,4}$/.test(cols[0].toUpperCase())) {
+          monthYear = normalizeMonthYear(cols[0]);
+          continue;
+        }
+
+        const sno = cols[0];
+        const itemName = cols[1] || cols[0];
+        const total = cols[2] !== undefined ? cols[2] : '';
+
+        if (!sno && itemName && (total === '' || isNaN(parseFloat(String(total).replace(/[,₹\s]/g,''))))) {
+          currentCategory = itemName.trim();
+          continue;
+        }
+
+        if (sno && !isNaN(parseInt(sno, 10)) && itemName) {
+          const amount = parseFloat(String(total).replace(/[,₹\s]/g,''));
+          if (!isNaN(amount) || String(total).trim() === '0') {
+            let saleDate = new Date();
+            if (monthYear) {
+              const parts = monthYear.split('-');
+              const monthKey = parts[0].substring(0, 3).toUpperCase();
+              const month = monthNameMap[monthKey] ?? 0;
+              const year = parseInt(parts[1], 10) || new Date().getFullYear();
+              saleDate = new Date(year, month, 1);
+            }
+            sheetRecords.push({
+              date: saleDate.toISOString().split('T')[0],
+              product_name: itemName.trim(),
+              category: currentCategory,
+              total_amount: isNaN(amount) ? 0 : amount,
+              quantity: 1,
+              customer_name: '',
+              payment_mode: 'Cash',
+            });
+          }
+          continue;
+        }
+      }
+
+      if (!sheetRecords.length) {
+        warnings.push(`Sheet '${sheetName}' contained no sales rows.`);
+      }
+
+      sheetSummaries.push({ sheetName, monthYear: monthYear || sheetName, rows: sheetRecords.length });
+      records.push(...sheetRecords);
+      return warnings;
+    };
+
+    const allWarnings = [];
+    wb.SheetNames.forEach(sheetName => {
+      const warnings = parseSheet(sheetName);
+      allWarnings.push(...warnings);
+    });
+
+    const monthYear = sheetSummaries.map(s => s.monthYear).filter(Boolean).join(', ');
+    return {
+      success:true,
+      records,
+      monthYear,
+      totalRows: records.length,
+      preview: records.slice(0, 10),
+      warnings: allWarnings,
+      sheetSummaries,
+    };
   } catch(e) { return { success:false, error:e.message }; }
 }
 
@@ -96,4 +163,4 @@ function exportToExcel(data, columns, filePath) {
   } catch(e) { return { success:false, error:e.message }; }
 }
 
-module.exports = { parseFile, parseStockRegister, exportToExcel };
+module.exports = { parseFile, parseStockRegister: parseSalesByMonth, parseSalesByMonth, exportToExcel };

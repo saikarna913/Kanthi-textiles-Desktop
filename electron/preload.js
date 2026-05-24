@@ -50,6 +50,13 @@ contextBridge.exposeInMainWorld('electron', {
     openFileDialog: () => invoke('excel:openFileDialog'),
     parseFile: (p) => invoke('excel:parseFile', p),
     parseStockRegister: (p) => invoke('excel:parseStockRegister', p),
+    parseSalesByMonth: async (p) => {
+      try {
+        return await invoke('excel:parseSalesByMonth', p);
+      } catch (e) {
+        return await invoke('excel:parseStockRegister', p);
+      }
+    },
     exportData: (o) => invoke('excel:exportData', o),
   },
   app: {

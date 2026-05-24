@@ -117,16 +117,20 @@ export default function ImportPage() {
     try {
       console.log(`Parsing ${importType} file: ${filePath}`);
       let result;
-      if (importType === 'stock') {
-        result = await window.electron.excel.parseStockRegister(filePath);
+      if (importType === 'sales_by_month') {
+        const parser = window.electron.excel.parseStockRegister || window.electron.excel.parseSalesByMonth;
+        if (!parser) {
+          throw new Error('Sales-by-month parser not available');
+        }
+        result = await parser(filePath);
       } else {
         result = await window.electron.excel.parseFile(filePath);
       }
       console.log('Parse result:', result);
       toast.dismiss('parse');
-      if (!result.success) { 
-        toast.error(result.error || 'Failed to parse file'); 
-        return; 
+      if (!result.success) {
+        toast.error(result.error || 'Failed to parse file');
+        return;
       }
       setParseResult(result);
       setStep(2);
@@ -147,11 +151,7 @@ export default function ImportPage() {
     try {
       console.log(`Importing ${parseResult.records.length} ${importType} records...`);
       let result;
-      if (importType === 'stock') {
-        result = await window.electron.db.importStockRegister(parseResult.records, parseResult.monthYear);
-      } else {
-        result = await window.electron.db.insertSales(parseResult.records);
-      }
+      result = await window.electron.db.insertSales(parseResult.records);
       console.log('Import result:', result);
       if (!result?.success && result?.error) {
         toast.error(`Import failed: ${result.error}`);
@@ -224,7 +224,7 @@ export default function ImportPage() {
               <h3 style={{fontSize:12,fontWeight:700,color:'var(--text-primary)',marginBottom:10}}>Supported Formats</h3>
               {[
                 {icon:'📊', title:'Standard Sales Excel', desc:'invoice, date, customer, product, amount columns'},
-                {icon:'📋', title:'Your Stock Register', desc:'S.NO / STOCK ITEMS / TOTAL format (October-24 style)'},
+              {icon:'📋', title:'Sales by Month', desc:'S.NO / STOCK ITEMS / TOTAL format (February-25 style)'},
                 {icon:'📄', title:'Custom Format', desc:'We auto-detect and map common column names'},
               ].map(f=>(
                 <div key={f.title} style={{display:'flex',gap:10,marginBottom:10}}>
@@ -256,7 +256,7 @@ export default function ImportPage() {
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14,marginBottom:20}}>
             {[
               {id:'sales',icon:'🛒',title:'Sales Transaction Data',desc:'Records with customer, product, amount, date — adds to your sales history'},
-              {id:'stock',icon:'📦',title:'Stock Register',desc:'Your monthly stock format: S.NO / STOCK ITEMS / TOTAL — updates inventory levels'},
+              {id:'sales_by_month',icon:'📊',title:'Sales by Month',desc:'Monthly format: S.NO / STOCK ITEMS / TOTAL — parsed as sales records'},
             ].map(t=>(
               <button key={t.id} onClick={()=>setImportType(t.id)} style={{padding:18,background:importType===t.id?'var(--accent-bg)':'var(--bg-card)',border:`1px solid ${importType===t.id?'var(--accent-border)':'var(--border)'}`,borderRadius:14,cursor:'pointer',textAlign:'left',fontFamily:'inherit',transition:'all .15s'}}>
                 <div style={{fontSize:24,marginBottom:8}}>{t.icon}</div>
@@ -308,17 +308,17 @@ export default function ImportPage() {
             </div>
           </Card>
 
-          {importType === 'stock' && parseResult.monthYear && (
+          {importType === 'sales_by_month' && parseResult.monthYear && (
             <div style={{background:'var(--accent-bg)',border:'1px solid var(--accent-border)',borderRadius:12,padding:'10px 14px',fontSize:12}}>
               <span style={{color:'var(--text-muted)'}}>Detected month: </span>
               <span style={{color:'var(--accent)',fontWeight:700}}>{parseResult.monthYear}</span>
-              <span style={{color:'var(--text-muted)'}}> — stock levels will be updated for {parseResult.totalRows} items</span>
+              <span style={{color:'var(--text-muted)'}}> — {parseResult.totalRows} sales records will be added</span>
             </div>
           )}
 
           <div style={{display:'flex',gap:10,alignItems:'center'}}>
             <Button icon={importing?null:ArrowRight} onClick={handleImport} disabled={importing}>
-              {importing?'Importing...': `Import ${parseResult.totalRows} ${importType==='stock'?'Stock Items':'Records'}`}
+              {importing?'Importing...': `Import ${parseResult.totalRows} Records`}
             </Button>
             <Button variant="ghost" onClick={()=>setStep(1)}>← Back</Button>
           </div>
@@ -337,7 +337,7 @@ export default function ImportPage() {
               <span style={{fontSize:24,fontFamily:'monospace',fontWeight:700,color:'var(--accent)'}}>{(importResult.inserted||importResult.upserted||0).toLocaleString()}</span>
             </p>
             <p style={{fontSize:13,color:'var(--text-muted)',marginBottom:24}}>
-              {importType==='stock'?'inventory items updated':'sales records added to database'}
+              sales records added to database
             </p>
             <div style={{display:'flex',gap:10,justifyContent:'center'}}>
               <Button icon={Upload} onClick={reset}>Import Another File</Button>

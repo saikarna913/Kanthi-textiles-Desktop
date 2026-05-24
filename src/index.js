@@ -10,7 +10,12 @@ const defaultElectronApi = {
     close: () => {},
   },
   db: { getSeedStatus: () => Promise.resolve({ seeded: true }) },
-  excel: {},
+  excel: {
+    parseSalesByMonth: () => undefined,
+    parseStockRegister: () => undefined,
+    parseFile: () => undefined,
+    openFileDialog: () => undefined,
+  },
   app: { getVersion: () => Promise.resolve('dev') },
 };
 

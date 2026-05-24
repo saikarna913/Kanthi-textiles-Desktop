@@ -165,6 +165,12 @@ ipcMain.handle('excel:openFileDialog', async () => {
 });
 ipcMain.handle('excel:parseFile', async (_, filePath) => excelService.parseFile(filePath));
 ipcMain.handle('excel:parseStockRegister', async (_, filePath) => excelService.parseStockRegister(filePath));
+ipcMain.handle('excel:parseSalesByMonth', async (_, filePath) => {
+  if (typeof excelService.parseSalesByMonth === 'function') {
+    return excelService.parseSalesByMonth(filePath);
+  }
+  return excelService.parseStockRegister(filePath);
+});
 ipcMain.handle('excel:exportData', async (_, opts) => {
   const r = await dialog.showSaveDialog(mainWindow, { title:'Save Export', defaultPath: path.join(app.getPath('downloads'), opts.filename||'export.xlsx'), filters:[{name:'Excel',extensions:['xlsx']}] });
   if (r.canceled) return null;
