@@ -16,6 +16,10 @@ const EXPECTED = [
 ];
 
 const STEPS = ['Upload File', 'Choose Import Type', 'Preview & Validate', 'Import'];
+const IMPORT_LABELS = {
+  sales: 'Sales Transaction Data',
+  sales_by_month: 'Sales by Month',
+};
 
 export default function ImportPage() {
   const [step, setStep] = useState(0);
@@ -118,11 +122,7 @@ export default function ImportPage() {
       console.log(`Parsing ${importType} file: ${filePath}`);
       let result;
       if (importType === 'sales_by_month') {
-        const parser = window.electron.excel.parseStockRegister || window.electron.excel.parseSalesByMonth;
-        if (!parser) {
-          throw new Error('Sales-by-month parser not available');
-        }
-        result = await parser(filePath);
+        result = await window.electron.excel.parseSalesByMonth(filePath);
       } else {
         result = await window.electron.excel.parseFile(filePath);
       }
@@ -131,6 +131,10 @@ export default function ImportPage() {
       if (!result.success) {
         toast.error(result.error || 'Failed to parse file');
         return;
+      }
+      if (Array.isArray(result.records)) {
+        result.records = result.records.map(r => ({ ...r, sales_type: importType }));
+        result.preview = result.preview?.map(r => ({ ...r, sales_type: importType }));
       }
       setParseResult(result);
       setStep(2);
@@ -170,6 +174,36 @@ export default function ImportPage() {
   };
 
   const reset = () => { setStep(0); setFilePath(''); setFileName(''); setImportType(''); setParseResult(null); setImportResult(null); };
+
+  const downloadTemplate = async (type) => {
+    const isMonthly = type === 'sales_by_month';
+    const templateData = isMonthly ? [
+      { 'S.NO': 1, 'STOCK ITEMS': 'Sample Item', 'TOTAL': 1200 }
+    ] : [
+      { date:'2024-10-01', customer_name:'Sample Customer', product_name:'MALMAL KALAMKARI SAREE', category:'KALAMKARI SAREES', quantity:2, unit_price:500, total_amount:1000, profit:300, payment_mode:'Cash' }
+    ];
+    const columns = isMonthly ? [
+      { key:'S.NO', header:'S.NO', width:8 },
+      { key:'STOCK ITEMS', header:'STOCK ITEMS', width:26 },
+      { key:'TOTAL', header:'TOTAL', width:14 },
+    ] : [
+      { key:'date', header:'Date', width:14 },
+      { key:'customer_name', header:'Customer Name', width:22 },
+      { key:'product_name', header:'Product Name', width:28 },
+      { key:'category', header:'Category', width:20 },
+      { key:'quantity', header:'Quantity', width:10 },
+      { key:'unit_price', header:'Unit Price', width:12 },
+      { key:'total_amount', header:'Total Amount', width:14 },
+      { key:'profit', header:'Profit', width:12 },
+      { key:'payment_mode', header:'Payment Mode', width:14 },
+    ];
+    await window.electron.excel.exportData({
+      data: templateData,
+      columns,
+      filename: `kanthi_import_template_${type}.xlsx`,
+      sheetName: type,
+    });
+  };
 
   const dropSt = {
     border: `2px dashed ${dragActive ? 'var(--accent)' : 'var(--border)'}`,
@@ -233,12 +267,14 @@ export default function ImportPage() {
                 </div>
               ))}
             </Card>
-            <button onClick={async()=>{
-              const templateData = [{date:'2024-10-01',customer_name:'Sample Customer',product_name:'MALMAL SAREE (S.P)',category:'KALAMKARI SAREES',quantity:2,unit_price:500,total_amount:1000,profit:300,payment_mode:'Cash'}];
-              await window.electron.excel.exportData({data:templateData,columns:[{key:'date',header:'Date',width:14},{key:'customer_name',header:'Customer Name',width:20},{key:'product_name',header:'Product Name',width:25},{key:'category',header:'Category',width:20},{key:'quantity',header:'Quantity',width:10},{key:'unit_price',header:'Unit Price',width:12},{key:'total_amount',header:'Total Amount',width:14},{key:'profit',header:'Profit',width:12},{key:'payment_mode',header:'Payment Mode',width:14}],filename:'kanthi_import_template.xlsx'});
-            }} style={{background:'var(--bg-hover)',border:'1px solid var(--border)',borderRadius:10,padding:'10px',fontSize:12,color:'var(--text-secondary)',cursor:'pointer',fontFamily:'inherit',textAlign:'center'}}>
-              ⬇ Download Import Template
-            </button>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
+              <button onClick={() => downloadTemplate('sales')} style={{background:'var(--bg-hover)',border:'1px solid var(--border)',borderRadius:10,padding:'10px',fontSize:12,color:'var(--text-secondary)',cursor:'pointer',fontFamily:'inherit',textAlign:'center'}}>
+                ⬇ Download Sales Transaction Template
+              </button>
+              <button onClick={() => downloadTemplate('sales_by_month')} style={{background:'var(--bg-hover)',border:'1px solid var(--border)',borderRadius:10,padding:'10px',fontSize:12,color:'var(--text-secondary)',cursor:'pointer',fontFamily:'inherit',textAlign:'center'}}>
+                ⬇ Download Sales by Month Template
+              </button>
+            </div>
           </div>
         </div>
       )}

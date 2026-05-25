@@ -61,6 +61,18 @@ function parseSalesByMonth(filePath) {
           return `${monthPart.charAt(0)+monthPart.slice(1).toLowerCase()}-${fullYear}`;
         }
       }
+      const compactMatch = direct.match(/^([A-Z]{3,9})(\d{2,4})$/);
+      if (compactMatch) {
+        const monthPart = compactMatch[1];
+        const year = compactMatch[2];
+        const monthKey = monthPart.substring(0, 3);
+        const month = monthNameMap[monthPart] ?? monthNameMap[monthKey];
+        if (month !== undefined) {
+          const fullYear = year.length === 2 ? 2000 + parseInt(year, 10) : parseInt(year, 10);
+          const monthText = monthPart.charAt(0)+monthPart.slice(1).toLowerCase();
+          return `${monthText}-${fullYear}`;
+        }
+      }
       if (monthNameMap[trimmed] !== undefined) {
         return `${trimmed.charAt(0)+trimmed.slice(1).toLowerCase()}-${new Date().getFullYear()}`;
       }
@@ -75,6 +87,12 @@ function parseSalesByMonth(filePath) {
       const sheetRecords = [];
       const warnings = [];
 
+      const headerPatterns = [/^S\.?NO$/i, /^STOCK\s*ITEMS$/i, /^TOTAL$/i, /^MONTH$/i, /^CATALOGUE$/i];
+      const isHeaderRow = (cols) => {
+        const normalized = cols.map(c => String(c||'').trim().toUpperCase());
+        return normalized.some(v => headerPatterns.some(rx => rx.test(v))) && normalized.filter(Boolean).length >= 2;
+      };
+
       for (const row of rows) {
         const cols = row.map(c => String(c||'').trim());
         if (!monthYear && cols[0] && /^[A-Z][A-Z ]+[ -–—]?[0-9]{2,4}$/.test(cols[0].toUpperCase())) {
@@ -82,18 +100,22 @@ function parseSalesByMonth(filePath) {
           continue;
         }
 
+        if (isHeaderRow(cols)) {
+          continue;
+        }
+
         const sno = cols[0];
         const itemName = cols[1] || cols[0];
         const total = cols[2] !== undefined ? cols[2] : '';
 
-        if (!sno && itemName && (total === '' || isNaN(parseFloat(String(total).replace(/[,₹\s]/g,''))))) {
+        const totalValue = parseFloat(String(total).replace(/[,₹\s]/g,''));
+        if (!sno && itemName && (total === '' || isNaN(totalValue))) {
           currentCategory = itemName.trim();
           continue;
         }
 
         if (sno && !isNaN(parseInt(sno, 10)) && itemName) {
-          const amount = parseFloat(String(total).replace(/[,₹\s]/g,''));
-          if (!isNaN(amount) || String(total).trim() === '0') {
+          if (!isNaN(totalValue) || String(total).trim() === '0') {
             let saleDate = new Date();
             if (monthYear) {
               const parts = monthYear.split('-');
@@ -102,12 +124,13 @@ function parseSalesByMonth(filePath) {
               const year = parseInt(parts[1], 10) || new Date().getFullYear();
               saleDate = new Date(year, month, 1);
             }
+            const mappedValue = isNaN(totalValue) ? 0 : totalValue;
             sheetRecords.push({
               date: saleDate.toISOString().split('T')[0],
               product_name: itemName.trim(),
               category: currentCategory,
-              total_amount: isNaN(amount) ? 0 : amount,
-              quantity: 1,
+              total_amount: mappedValue,
+              quantity: mappedValue,
               customer_name: '',
               payment_mode: 'Cash',
             });
@@ -144,14 +167,14 @@ function parseSalesByMonth(filePath) {
   } catch(e) { return { success:false, error:e.message }; }
 }
 
-function exportToExcel(data, columns, filePath) {
+function exportToExcel(data, columns, filePath, sheetName = 'Data') {
   try {
     const headers = columns.map(c => c.header||c.key);
     const rows = data.map(row => columns.map(c => row[c.key]??''));
     const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
     ws['!cols'] = columns.map(c => ({ wch: Math.max(c.width||15, (c.header||c.key).length+2) }));
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Data');
+    XLSX.utils.book_append_sheet(wb, ws, sheetName);
     const sumSheet = XLSX.utils.aoa_to_sheet([
       ['Kanthi Textiles Export'],['Generated:', new Date().toLocaleString()],
       ['Records:', data.length],

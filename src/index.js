@@ -24,7 +24,7 @@ const safeDbTarget = { ...defaultElectronApi.db, ...(existingElectron?.db || {})
 const safeExcelTarget = { ...defaultElectronApi.excel, ...(existingElectron?.excel || {}) };
 const safeAppTarget = { ...defaultElectronApi.app, ...(existingElectron?.app || {}) };
 
-const electronApi = {
+const electronApi = existingElectron ? existingElectron : {
   window: { ...defaultElectronApi.window, ...(existingElectron?.window || {}) },
   db: new Proxy(safeDbTarget, {
     get: (target, prop) => {

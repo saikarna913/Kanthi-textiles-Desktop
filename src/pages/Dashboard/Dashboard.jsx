@@ -4,34 +4,46 @@ import {
   ResponsiveContainer, PieChart, Pie, Cell
 } from 'recharts';
 import { LayoutDashboard, RefreshCw, IndianRupee, ShoppingCart, TrendingUp, Users, Package, AlertTriangle } from 'lucide-react';
-import { StatCard, Card, Badge, ProgressBar, PageHeader, Button, ChartTooltip } from '../../components/ui/index';
+import { StatCard, Card, Badge, ProgressBar, PageHeader, Button, ChartTooltip, Select } from '../../components/ui/index';
 
 const COLORS = ['#14B8A6','#F59E0B','#3B82F6','#8B5CF6','#EF4444','#10B981','#EC4899'];
 const fmtShort = v => v >= 100000 ? `₹${(v/100000).toFixed(1)}L` : v >= 1000 ? `₹${(v/1000).toFixed(0)}k` : `₹${Number(v).toFixed(0)}`;
+const IMPORT_TYPES = [
+  { value:'', label:'All Import Types' },
+  { value:'sales', label:'Sales Transaction Data' },
+  { value:'sales_by_month', label:'Sales by Month' },
+];
 
 export default function Dashboard() {
   const [stats, setStats] = useState({});
   const [monthly, setMonthly] = useState([]);
   const [topProducts, setTopProducts] = useState([]);
   const [categories, setCategories] = useState([]);
+  const [statsSales, setStatsSales] = useState({});
+  const [statsByMonth, setStatsByMonth] = useState({});
+  const [salesType, setSalesType] = useState('');
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [s, m, tp, cat] = await Promise.all([
-        window.electron.db.getDashboardStats(),
-        window.electron.db.getMonthlySales(12),
-        window.electron.db.getTopProducts(8),
-        window.electron.db.getCategoryAnalysis(),
+      const [s, m, tp, cat, sSales, sByMonth] = await Promise.all([
+        window.electron.db.getDashboardStats({ salesType }),
+        window.electron.db.getMonthlySales({ months:12, salesType }),
+        window.electron.db.getTopProducts({ limit:8, salesType }),
+        window.electron.db.getCategoryAnalysis({ salesType }),
+        window.electron.db.getDashboardStats({ salesType:'sales' }),
+        window.electron.db.getDashboardStats({ salesType:'sales_by_month' }),
       ]);
       setStats(s || {});
       setMonthly(Array.isArray(m) ? m : []);
       setTopProducts(Array.isArray(tp) ? tp : []);
       setCategories(Array.isArray(cat) ? cat.slice(0, 7) : []);
+      setStatsSales(sSales || {});
+      setStatsByMonth(sByMonth || {});
     } catch(e) { console.error(e); }
     setLoading(false);
-  }, []);
+  }, [salesType]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -50,7 +62,60 @@ export default function Dashboard() {
       <PageHeader title="Dashboard"
         subtitle={new Date().toLocaleDateString('en-IN',{weekday:'long',year:'numeric',month:'long',day:'numeric'})}
         icon={LayoutDashboard}
-        actions={<Button variant="secondary" size="sm" icon={RefreshCw} onClick={load}>Refresh</Button>}/>
+        actions={
+          <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+            <Select
+              value={salesType}
+              onChange={e => setSalesType(e.target.value)}
+              options={IMPORT_TYPES}
+              placeholder="All import types"
+              style={{width:220}}
+            />
+            <Button variant="secondary" size="sm" icon={RefreshCw} onClick={load}>Refresh</Button>
+          </div>
+        }/>
+
+      <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:14,marginBottom:14}} className="stagger">
+        <Card>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
+            <div>
+              <h3 style={{fontSize:13,fontWeight:700,color:'var(--text-primary)'}}>Sales Transaction Analysis</h3>
+              <p style={{fontSize:11,color:'var(--text-muted)'}}>Standard sales excel / transaction data</p>
+            </div>
+            <Badge variant="accent">Transactions</Badge>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:10}}>
+            <div style={{fontSize:11,color:'var(--text-muted)'}}>Total revenue</div>
+            <div style={{fontSize:11,fontFamily:'monospace',fontWeight:700}}>{statsSales?.totalSales||0}</div>
+            <div style={{fontSize:11,color:'var(--text-muted)'}}>Total orders</div>
+            <div style={{fontSize:11,fontFamily:'monospace',fontWeight:700}}>{statsSales?.totalOrders||0}</div>
+            <div style={{fontSize:11,color:'var(--text-muted)'}}>Unique customers</div>
+            <div style={{fontSize:11,fontFamily:'monospace',fontWeight:700}}>{statsSales?.uniqueCustomers||0}</div>
+            <div style={{fontSize:11,color:'var(--text-muted)'}}>This month</div>
+            <div style={{fontSize:11,fontFamily:'monospace',fontWeight:700}}>{statsSales?.thisMonthSales||0}</div>
+          </div>
+        </Card>
+
+        <Card>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
+            <div>
+              <h3 style={{fontSize:13,fontWeight:700,color:'var(--text-primary)'}}>Monthly Sales Analysis</h3>
+              <p style={{fontSize:11,color:'var(--text-muted)'}}>S.NO / STOCK ITEMS / TOTAL format</p>
+            </div>
+            <Badge variant="gold">Monthly</Badge>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:10}}>
+            <div style={{fontSize:11,color:'var(--text-muted)'}}>Total revenue</div>
+            <div style={{fontSize:11,fontFamily:'monospace',fontWeight:700}}>{statsByMonth?.totalSales||0}</div>
+            <div style={{fontSize:11,color:'var(--text-muted)'}}>Total entries</div>
+            <div style={{fontSize:11,fontFamily:'monospace',fontWeight:700}}>{statsByMonth?.totalOrders||0}</div>
+            <div style={{fontSize:11,color:'var(--text-muted)'}}>Unique customers</div>
+            <div style={{fontSize:11,fontFamily:'monospace',fontWeight:700}}>{statsByMonth?.uniqueCustomers||0}</div>
+            <div style={{fontSize:11,color:'var(--text-muted)'}}>This month</div>
+            <div style={{fontSize:11,fontFamily:'monospace',fontWeight:700}}>{statsByMonth?.thisMonthSales||0}</div>
+          </div>
+        </Card>
+      </div>
 
       {/* KPI Row 1 */}
       <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:14,marginBottom:14}} className="stagger">

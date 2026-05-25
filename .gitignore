@@ -38,6 +38,10 @@ lerna-debug.log*
 # Temporary
 tmp/
 temp/
+temp-sysinternals/
+
+# Generated archives
+kanthi-textiles-dist.zip
 
 # Better SQLite3 database files
 *.db

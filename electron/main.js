@@ -19,6 +19,10 @@ function loadServices() {
     dbService = require('./database')(appDataPath);
     excelService = require('./excel');
     console.log('Services loaded');
+    // Validate DB service exports to catch missing functions early
+    const expectedDbFns = ['getDashboardStats','getMonthlySales','getTopProducts','getSalesData','getSaleById','insertSale','insertSales','updateSale','deleteSale','deleteSalesByIds','deleteSalesByFilter'];
+    const missing = expectedDbFns.filter(n => typeof dbService[n] !== 'function');
+    if (missing.length) console.warn('DB service missing expected functions:', missing.join(', '));
   } catch (err) { console.error('Services load failed:', err); }
 }
 
@@ -84,6 +88,8 @@ dbHandler('db:insertSale', (d) => dbService.insertSale(d));
 dbHandler('db:insertSales', (r) => dbService.insertSales(r));
 dbHandler('db:updateSale', ({id,data}) => dbService.updateSale(id,data));
 dbHandler('db:deleteSale', (id) => dbService.deleteSale(id));
+dbHandler('db:deleteSalesByIds', (ids) => dbService.deleteSalesByIds(ids));
+dbHandler('db:deleteSalesByFilter', (params) => dbService.deleteSalesByFilter(params));
 dbHandler('db:getCategoryAnalysis', () => dbService.getCategoryAnalysis());
 dbHandler('db:getRegionAnalysis', () => dbService.getRegionAnalysis());
 dbHandler('db:getTimeSeries', (p) => dbService.getTimeSeries(p));
@@ -174,7 +180,7 @@ ipcMain.handle('excel:parseSalesByMonth', async (_, filePath) => {
 ipcMain.handle('excel:exportData', async (_, opts) => {
   const r = await dialog.showSaveDialog(mainWindow, { title:'Save Export', defaultPath: path.join(app.getPath('downloads'), opts.filename||'export.xlsx'), filters:[{name:'Excel',extensions:['xlsx']}] });
   if (r.canceled) return null;
-  const res = excelService.exportToExcel(opts.data, opts.columns, r.filePath);
+  const res = excelService.exportToExcel(opts.data, opts.columns, r.filePath, opts.sheetName);
   if (res.success) shell.showItemInFolder(r.filePath);
   return res;
 });

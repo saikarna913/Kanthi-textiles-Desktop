@@ -128,15 +128,22 @@ module.exports = function createDatabase(appDataPath) {
     CREATE INDEX IF NOT EXISTS idx_inv_tx_date ON inventory_transactions(transaction_date);
   `);
 
-  // ── Dashboard Stats ────────────────────────────────────────────────────────
-  function getDashboardStats() {
-    const totalSales = db.prepare(`SELECT COALESCE(SUM(total_amount),0) as value FROM sales`).get();
-    const totalOrders = db.prepare(`SELECT COUNT(*) as value FROM sales`).get();
-    const totalProfit = db.prepare(`SELECT COALESCE(SUM(profit),0) as value FROM sales`).get();
-    const avgOrder = db.prepare(`SELECT COALESCE(AVG(total_amount),0) as value FROM sales`).get();
-    const uniqueCustomers = db.prepare(`SELECT COUNT(DISTINCT customer_name) as value FROM sales WHERE customer_name != ''`).get();
-    const thisMonth = db.prepare(`SELECT COALESCE(SUM(total_amount),0) as value FROM sales WHERE strftime('%Y-%m', date) = strftime('%Y-%m', 'now')`).get();
-    const lastMonth = db.prepare(`SELECT COALESCE(SUM(total_amount),0) as value FROM sales WHERE strftime('%Y-%m', date) = strftime('%Y-%m', date('now','-1 month'))`).get();
+  const existingSalesColumns = db.prepare(`PRAGMA table_info(sales)`).all().map(c => c.name);
+  if (!existingSalesColumns.includes('sales_type')) {
+    db.exec(`ALTER TABLE sales ADD COLUMN sales_type TEXT DEFAULT 'sales'`);
+  }
+
+  function getDashboardStats(params) {
+    const salesType = params?.salesType;
+    const whereClause = salesType ? `WHERE sales_type = ?` : '';
+    const args = salesType ? [salesType] : [];
+    const totalSales = db.prepare(`SELECT COALESCE(SUM(total_amount),0) as value FROM sales ${whereClause}`).get(...args);
+    const totalOrders = db.prepare(`SELECT COUNT(*) as value FROM sales ${whereClause}`).get(...args);
+    const totalProfit = db.prepare(`SELECT COALESCE(SUM(profit),0) as value FROM sales ${whereClause}`).get(...args);
+    const avgOrder = db.prepare(`SELECT COALESCE(AVG(total_amount),0) as value FROM sales ${whereClause}`).get(...args);
+    const uniqueCustomers = db.prepare(`SELECT COUNT(DISTINCT customer_name) as value FROM sales ${whereClause} AND customer_name != ''`).get(...args);
+    const thisMonth = db.prepare(`SELECT COALESCE(SUM(total_amount),0) as value FROM sales ${whereClause} AND strftime('%Y-%m', date) = strftime('%Y-%m', 'now')`).get(...args);
+    const lastMonth = db.prepare(`SELECT COALESCE(SUM(total_amount),0) as value FROM sales ${whereClause} AND strftime('%Y-%m', date) = strftime('%Y-%m', date('now','-1 month'))`).get(...args);
     const growth = lastMonth.value > 0 ? ((thisMonth.value - lastMonth.value) / lastMonth.value) * 100 : 0;
     const lowStock = db.prepare(`SELECT COUNT(*) as value FROM inventory WHERE current_stock <= min_stock`).get();
     const totalInventoryValue = db.prepare(`SELECT COALESCE(SUM(current_stock * unit_cost),0) as value FROM inventory`).get();
@@ -152,39 +159,49 @@ module.exports = function createDatabase(appDataPath) {
     };
   }
 
-  function getMonthlySales(months) {
-    const m = parseInt(months) || 12;
+  function getMonthlySales(monthsOrParams) {
+    const opts = typeof monthsOrParams === 'object' && monthsOrParams !== null ? monthsOrParams : { months: monthsOrParams };
+    const m = parseInt(opts.months) || 12;
+    const salesType = opts.salesType;
+    const typeClause = salesType ? `AND sales_type = ?` : '';
+    const args = salesType ? [salesType] : [];
     return db.prepare(`
       SELECT strftime('%Y-%m', date) as month, strftime('%b %Y', date) as label,
         ROUND(SUM(total_amount),2) as sales, ROUND(SUM(profit),2) as profit,
         COUNT(*) as orders, COUNT(DISTINCT customer_name) as customers
-      FROM sales WHERE date >= date('now', '-${m} months')
+      FROM sales WHERE date >= date('now', '-${m} months') ${typeClause}
       GROUP BY strftime('%Y-%m', date) ORDER BY month ASC
-    `).all();
+    `).all(...args);
   }
 
-  function getTopProducts(limit) {
-    const l = parseInt(limit) || 10;
+  function getTopProducts(limitOrParams) {
+    const opts = typeof limitOrParams === 'object' && limitOrParams !== null ? limitOrParams : { limit: limitOrParams };
+    const l = parseInt(opts.limit) || 10;
+    const salesType = opts.salesType;
+    const typeClause = salesType ? `WHERE sales_type = ?` : '';
+    const args = salesType ? [salesType] : [];
     return db.prepare(`
       SELECT product_name, category, SUM(quantity) as total_qty,
         ROUND(SUM(total_amount),2) as total_sales, ROUND(SUM(profit),2) as total_profit,
         COUNT(*) as order_count, ROUND(AVG(unit_price),2) as avg_price
-      FROM sales GROUP BY product_name ORDER BY total_sales DESC LIMIT ${l}
-    `).all();
+      FROM sales ${typeClause} GROUP BY product_name ORDER BY total_sales DESC LIMIT ${l}
+    `).all(...args);
   }
 
   function getSalesData(params) {
-    const { page=1, limit=50, search='', category='', region='', sortBy='date', sortDir='DESC', dateFrom='', dateTo='', customerId='' } = params || {};
+    const { page=1, limit=50, search='', category='', region='', sortBy='date', sortDir='DESC', dateFrom='', dateTo='', customerId='', customerName='', salesType='' } = params || {};
     let where = []; let args = [];
     if (search) { where.push(`(customer_name LIKE ? OR product_name LIKE ? OR invoice_no LIKE ?)`); args.push(`%${search}%`,`%${search}%`,`%${search}%`); }
+    if (customerName) { where.push(`customer_name LIKE ?`); args.push(`%${customerName}%`); }
     if (category) { where.push(`category = ?`); args.push(category); }
     if (region) { where.push(`region = ?`); args.push(region); }
+    if (salesType) { where.push(`sales_type = ?`); args.push(salesType); }
     if (dateFrom) { where.push(`date >= ?`); args.push(dateFrom); }
     if (dateTo) { where.push(`date <= ?`); args.push(dateTo); }
     if (customerId) { where.push(`customer_id = ?`); args.push(customerId); }
     const wc = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const offset = (page - 1) * limit;
-    const safe = ['date','total_amount','customer_name','product_name','profit','quantity'];
+    const safe = ['date','total_amount','customer_name','product_name','profit','quantity','sales_type'];
     const sb = safe.includes(sortBy) ? sortBy : 'date';
     const sd = sortDir === 'ASC' ? 'ASC' : 'DESC';
     const total = db.prepare(`SELECT COUNT(*) as count FROM sales ${wc}`).get(...args);
@@ -198,10 +215,10 @@ module.exports = function createDatabase(appDataPath) {
     const stmt = db.prepare(`
       INSERT INTO sales (invoice_no,date,customer_id,customer_name,customer_type,region,state,city,
         product_name,category,sub_category,sku,quantity,unit_price,discount,total_amount,
-        cost_price,profit,payment_mode,sales_rep,notes)
+        cost_price,profit,payment_mode,sales_rep,notes,sales_type)
       VALUES (@invoice_no,@date,@customer_id,@customer_name,@customer_type,@region,@state,@city,
         @product_name,@category,@sub_category,@sku,@quantity,@unit_price,@discount,@total_amount,
-        @cost_price,@profit,@payment_mode,@sales_rep,@notes)
+        @cost_price,@profit,@payment_mode,@sales_rep,@notes,@sales_type)
     `);
     const info = stmt.run({
       invoice_no: data.invoice_no||'', date: data.date||new Date().toISOString().split('T')[0],
@@ -212,7 +229,8 @@ module.exports = function createDatabase(appDataPath) {
       quantity: parseFloat(data.quantity)||1, unit_price: parseFloat(data.unit_price)||0,
       discount: parseFloat(data.discount)||0, total_amount: parseFloat(data.total_amount)||0,
       cost_price: parseFloat(data.cost_price)||0, profit: parseFloat(data.profit)||0,
-      payment_mode: data.payment_mode||'Cash', sales_rep: data.sales_rep||'', notes: data.notes||''
+      payment_mode: data.payment_mode||'Cash', sales_rep: data.sales_rep||'', notes: data.notes||'',
+      sales_type: data.sales_type||data.salesType||data.import_type||data.type||'sales'
     });
     updateCustomerStats(data.customer_name, data.date);
     return { success: true, id: info.lastInsertRowid };
@@ -225,10 +243,10 @@ module.exports = function createDatabase(appDataPath) {
     const stmt = db.prepare(`
       INSERT INTO sales (invoice_no,date,customer_name,customer_type,region,state,city,
         product_name,category,sub_category,sku,quantity,unit_price,discount,total_amount,
-        cost_price,profit,payment_mode,sales_rep,notes)
+        cost_price,profit,payment_mode,sales_rep,notes,sales_type)
       VALUES (@invoice_no,@date,@customer_name,@customer_type,@region,@state,@city,
         @product_name,@category,@sub_category,@sku,@quantity,@unit_price,@discount,@total_amount,
-        @cost_price,@profit,@payment_mode,@sales_rep,@notes)
+        @cost_price,@profit,@payment_mode,@sales_rep,@notes,@sales_type)
     `);
     const insertMany = db.transaction((rows) => {
       let count = 0, errors = [];
@@ -254,7 +272,8 @@ module.exports = function createDatabase(appDataPath) {
             profit: parseFloat(row.profit||row['Profit']||0),
             payment_mode: row.payment_mode||row['Payment Mode']||'Cash',
             sales_rep: row.sales_rep||row['Sales Rep']||'',
-            notes: row.notes||row['Notes']||''
+            notes: row.notes||row['Notes']||'',
+            sales_type: row.sales_type||row.salesType||row.import_type||row.type||'sales'
           });
           count++;
         } catch(e) { 
@@ -282,7 +301,7 @@ module.exports = function createDatabase(appDataPath) {
   function updateSale(id, data) {
     const allowed = ['invoice_no','date','customer_name','customer_type','region','state','city',
       'product_name','category','sub_category','sku','quantity','unit_price','discount',
-      'total_amount','cost_price','profit','payment_mode','sales_rep','notes'];
+      'total_amount','cost_price','profit','payment_mode','sales_rep','notes','sales_type'];
     const fields = Object.keys(data).filter(k => allowed.includes(k));
     if (!fields.length) return { success: false, error: 'No valid fields' };
     const sets = fields.map(k => `${k} = @${k}`).join(', ');
@@ -292,39 +311,73 @@ module.exports = function createDatabase(appDataPath) {
 
   function deleteSale(id) { db.prepare(`DELETE FROM sales WHERE id = ?`).run(id); return { success: true }; }
 
+  function deleteSalesByIds(ids) {
+    if (!Array.isArray(ids) || !ids.length) return { success: false, error: 'No IDs provided' };
+    const placeholders = ids.map(() => '?').join(',');
+    const info = db.prepare(`DELETE FROM sales WHERE id IN (${placeholders})`).run(...ids);
+    return { success: true, deleted: info.changes };
+  }
+
+  function deleteSalesByFilter(params) {
+    const { search='', category='', region='', salesType='', dateFrom='', dateTo='' } = params || {};
+    const where = [];
+    const args = [];
+    if (search) { where.push(`(customer_name LIKE ? OR product_name LIKE ? OR invoice_no LIKE ?)`); args.push(`%${search}%`,`%${search}%`,`%${search}%`); }
+    if (category) { where.push(`category = ?`); args.push(category); }
+    if (region) { where.push(`region = ?`); args.push(region); }
+    if (salesType) { where.push(`sales_type = ?`); args.push(salesType); }
+    if (dateFrom) { where.push(`date >= ?`); args.push(dateFrom); }
+    if (dateTo) { where.push(`date <= ?`); args.push(dateTo); }
+    if (!where.length) return { success: false, error: 'No filters provided' };
+    const wc = `WHERE ${where.join(' AND ')}`;
+    const info = db.prepare(`DELETE FROM sales ${wc}`).run(...args);
+    return { success: true, deleted: info.changes };
+  }
+
   // ── Analytics ──────────────────────────────────────────────────────────────
-  function getCategoryAnalysis() {
+  function getCategoryAnalysis(params) {
+    const salesType = params?.salesType;
+    const where = salesType ? `WHERE category IS NOT NULL AND category != '' AND sales_type = ?` : `WHERE category IS NOT NULL AND category != ''`;
+    const args = salesType ? [salesType] : [];
     return db.prepare(`
       SELECT category, COUNT(*) as transactions, SUM(quantity) as total_qty,
         ROUND(SUM(total_amount),2) as total_sales, ROUND(SUM(profit),2) as total_profit,
         ROUND(AVG(total_amount),2) as avg_sale,
         ROUND(SUM(profit)/NULLIF(SUM(total_amount),0)*100,2) as margin_pct
-      FROM sales WHERE category IS NOT NULL AND category != ''
+      FROM sales ${where}
       GROUP BY category ORDER BY total_sales DESC
-    `).all();
+    `).all(...args);
   }
 
-  function getRegionAnalysis() {
+  function getRegionAnalysis(params) {
+    const salesType = params?.salesType;
+    const where = salesType ? `WHERE region IS NOT NULL AND region != '' AND sales_type = ?` : `WHERE region IS NOT NULL AND region != ''`;
+    const args = salesType ? [salesType] : [];
     return db.prepare(`
       SELECT region, COUNT(*) as transactions, COUNT(DISTINCT customer_name) as customers,
         ROUND(SUM(total_amount),2) as total_sales, ROUND(SUM(profit),2) as total_profit,
         ROUND(AVG(total_amount),2) as avg_sale
-      FROM sales WHERE region IS NOT NULL AND region != ''
+      FROM sales ${where}
       GROUP BY region ORDER BY total_sales DESC
-    `).all();
+    `).all(...args);
   }
 
   function getTimeSeries(params) {
-    const { granularity='monthly', months=24 } = params || {};
+    const { granularity='monthly', months=24, salesType='', metric='sales' } = params || {};
     const fmts = { daily:'%Y-%m-%d', weekly:'%Y-%W', monthly:'%Y-%m' };
     const fmt = fmts[granularity] || '%Y-%m';
+    const typeClause = salesType ? `AND sales_type = ?` : '';
+    const args = salesType ? [salesType] : [];
+    let valueExpr = 'ROUND(SUM(total_amount),2)';
+    if (metric === 'profit') valueExpr = 'ROUND(SUM(profit),2)';
+    if (metric === 'orders') valueExpr = 'COUNT(*)';
     const data = db.prepare(`
       SELECT strftime('${fmt}', date) as period,
-        ROUND(SUM(total_amount),2) as value, COUNT(*) as count,
+        ${valueExpr} as value, COUNT(*) as count,
         ROUND(SUM(total_amount),2) as sales, ROUND(SUM(profit),2) as profit
-      FROM sales WHERE date >= date('now', '-${parseInt(months)||24} months')
+      FROM sales WHERE date >= date('now', '-${parseInt(months)||24} months') ${typeClause}
       GROUP BY strftime('${fmt}', date) ORDER BY period ASC
-    `).all();
+    `).all(...args);
     return data.map((d, i) => {
       const window = data.slice(Math.max(0, i-6), i+1);
       const ma = window.reduce((s,r) => s+r.value, 0) / window.length;
@@ -333,11 +386,13 @@ module.exports = function createDatabase(appDataPath) {
   }
 
   function getForecasts(params) {
-    const { periods=6 } = params || {};
+    const { periods=6, salesType='' } = params || {};
+    const typeClause = salesType ? `WHERE sales_type = ?` : '';
+    const args = salesType ? [salesType] : [];
     const data = db.prepare(`
       SELECT strftime('%Y-%m', date) as month, ROUND(SUM(total_amount),2) as sales
-      FROM sales GROUP BY strftime('%Y-%m', date) ORDER BY month ASC
-    `).all();
+      FROM sales ${typeClause} GROUP BY strftime('%Y-%m', date) ORDER BY month ASC
+    `).all(...args);
     if (data.length < 3) return { historical: data, forecast: [], r2: 0 };
     const n = data.length, xs = data.map((_,i) => i), ys = data.map(d => d.sales);
     const xm = xs.reduce((a,b)=>a+b,0)/n, ym = ys.reduce((a,b)=>a+b,0)/n;
@@ -359,11 +414,14 @@ module.exports = function createDatabase(appDataPath) {
     return { historical: data, forecast, r2: Math.round(r2*1000)/1000, slope, intercept };
   }
 
-  function getAnomalies() {
+  function getAnomalies(params) {
+    const { salesType='' } = params || {};
+    const typeClause = salesType ? `WHERE sales_type = ?` : '';
+    const args = salesType ? [salesType] : [];
     const data = db.prepare(`
       SELECT strftime('%Y-%m-%d', date) as day, ROUND(SUM(total_amount),2) as sales, COUNT(*) as orders
-      FROM sales GROUP BY strftime('%Y-%m-%d', date) ORDER BY day ASC
-    `).all();
+      FROM sales ${typeClause} GROUP BY strftime('%Y-%m-%d', date) ORDER BY day ASC
+    `).all(...args);
     if (data.length < 5) return [];
     const vals = data.map(d => d.sales);
     const mean = vals.reduce((a,b)=>a+b,0)/vals.length;
@@ -372,16 +430,19 @@ module.exports = function createDatabase(appDataPath) {
       .filter(d => Math.abs(d.zScore) > 2).sort((a,b) => Math.abs(b.zScore)-Math.abs(a.zScore));
   }
 
-  function getCustomerAnalytics() {
+  function getCustomerAnalytics(params) {
+    const salesType = params?.salesType;
+    const where = salesType ? `WHERE customer_name != '' AND sales_type = ?` : `WHERE customer_name != ''`;
+    const args = salesType ? [salesType] : [];
     return db.prepare(`
       SELECT customer_name, customer_type, region,
         COUNT(*) as purchase_count, ROUND(SUM(total_amount),2) as total_spent,
         ROUND(AVG(total_amount),2) as avg_order, MIN(date) as first_purchase,
         MAX(date) as last_purchase, ROUND(SUM(profit),2) as total_profit,
         COUNT(DISTINCT category) as categories_bought
-      FROM sales WHERE customer_name != ''
+      FROM sales ${where}
       GROUP BY customer_name ORDER BY total_spent DESC LIMIT 200
-    `).all();
+    `).all(...args);
   }
 
   // ── Customer CRUD ──────────────────────────────────────────────────────────
@@ -714,6 +775,7 @@ module.exports = function createDatabase(appDataPath) {
   return {
     getDashboardStats, getMonthlySales, getTopProducts, getSalesData,
     getSaleById, insertSale, insertSales, updateSale, deleteSale,
+    deleteSalesByIds, deleteSalesByFilter,
     getCategoryAnalysis, getRegionAnalysis, getTimeSeries, getForecasts, getAnomalies,
     getCustomerAnalytics, getCustomers, getCustomerById, upsertCustomer, deleteCustomer,
     getInventory, upsertInventoryItem, deleteInventoryItem, addInventoryTransaction,

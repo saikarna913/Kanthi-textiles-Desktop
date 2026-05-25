@@ -12,22 +12,33 @@ import clsx from 'clsx';
 const COLORS = ['#14B8A6','#F59E0B','#3B82F6','#8B5CF6','#EF4444','#10B981','#EC4899'];
 const fmtShort = v => v>=100000?`₹${(v/100000).toFixed(1)}L`:v>=1000?`₹${(v/1000).toFixed(0)}k`:`₹${Number(v).toFixed(0)}`;
 const fmt = v => `₹${Number(v||0).toLocaleString('en-IN',{maximumFractionDigits:0})}`;
+const IMPORT_TYPES = [
+  { value:'', label:'All Import Types' },
+  { value:'sales', label:'Sales Transaction Data' },
+  { value:'sales_by_month', label:'Sales by Month' },
+];
 
 const selSt = { background:'var(--bg-input)', border:'1px solid var(--border)', color:'var(--text-primary)', borderRadius:8, padding:'6px 10px', fontSize:12, outline:'none', fontFamily:'inherit' };
 
 // ── Time Series ────────────────────────────────────────────────────────────────
-function TimeSeriesTab() {
+function TimeSeriesTab({ salesType }) {
   const [data, setData] = useState([]);
   const [granularity, setGranularity] = useState('monthly');
   const [metric, setMetric] = useState('sales');
   const [loading, setLoading] = useState(true);
 
+  const metricOptions = [
+    { value:'sales', label:'Revenue' },
+    { value:'profit', label:'Profit' },
+    { value:'orders', label: salesType === 'sales_by_month' ? 'Items' : 'Orders' },
+  ];
+
   useEffect(() => {
     setLoading(true);
-    window.electron.db.getTimeSeries({ granularity, metric, months:24 })
+    window.electron.db.getTimeSeries({ granularity, metric, months:24, salesType })
       .then(d=>{ setData(Array.isArray(d) ? d : []); setLoading(false); })
       .catch(() => { setData([]); setLoading(false); });
-  }, [granularity, metric]);
+  }, [granularity, metric, salesType]);
 
   const safeTimeSeries = Array.isArray(data) ? data : [];
   const peak = safeTimeSeries.reduce((mx,d)=>d.value>mx.value?d:mx, {value:0,period:'—'});
@@ -44,9 +55,7 @@ function TimeSeriesTab() {
           <option value="monthly">Monthly</option>
         </select>
         <select value={metric} onChange={e=>setMetric(e.target.value)} style={selSt}>
-          <option value="sales">Revenue</option>
-          <option value="profit">Profit</option>
-          <option value="orders">Orders</option>
+          {metricOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
         </select>
         <Badge variant="accent">{data.length} data points</Badge>
       </div>
@@ -94,20 +103,28 @@ function TimeSeriesTab() {
 }
 
 // ── Forecast ───────────────────────────────────────────────────────────────────
-function ForecastTab() {
-  const [data, setData] = useState(null);
+function ForecastTab({ salesType }) {
+  const [data, setData] = useState({ historical: [], forecast: [], r2: 0 });
   const [periods, setPeriods] = useState(6);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     setLoading(true);
-    window.electron.db.getForecasts({periods}).then(d=>{ setData(d); setLoading(false); });
-  }, [periods]);
+    window.electron.db.getForecasts({ periods, salesType })
+      .then(d => { setData({
+        historical: Array.isArray(d?.historical) ? d.historical : [],
+        forecast: Array.isArray(d?.forecast) ? d.forecast : [],
+        r2: typeof d?.r2 === 'number' ? d.r2 : 0,
+      }); setLoading(false); })
+      .catch(() => { setData({ historical: [], forecast: [], r2: 0 }); setLoading(false); });
+  }, [periods, salesType]);
 
-  const combined = data ? [
-    ...data.historical.map(d=>({...d,type:'historical'})),
-    ...data.forecast.map(d=>({...d,sales:d.predicted,type:'forecast'})),
-  ] : [];
+  const safeHistorical = Array.isArray(data.historical) ? data.historical : [];
+  const safeForecast = Array.isArray(data.forecast) ? data.forecast : [];
+  const combined = [
+    ...safeHistorical.map(d => ({ ...d, type: 'historical' })),
+    ...safeForecast.map(d => ({ ...d, sales: d.predicted, type: 'forecast' })),
+  ];
 
   return (
     <div style={{display:'flex',flexDirection:'column',gap:14}}>
@@ -173,15 +190,15 @@ function ForecastTab() {
 }
 
 // ── Anomaly ────────────────────────────────────────────────────────────────────
-function AnomalyTab() {
+function AnomalyTab({ salesType }) {
   const [anomalies, setAnomalies] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    window.electron.db.getAnomalies()
+    window.electron.db.getAnomalies({ salesType })
       .then(d => { setAnomalies(Array.isArray(d) ? d : []); setLoading(false); })
       .catch(() => { setAnomalies([]); setLoading(false); });
-  }, []);
+  }, [salesType]);
 
   const safeAnomalies = Array.isArray(anomalies) ? anomalies : [];
 
@@ -258,13 +275,14 @@ function AnomalyTab() {
 }
 
 // ── Category ───────────────────────────────────────────────────────────────────
-function CategoryTab() {
+function CategoryTab({ salesType }) {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    window.electron.db.getCategoryAnalysis().then(d=>{ setData(Array.isArray(d) ? d : []); setLoading(false); });
-  }, []);
+    setLoading(true);
+    window.electron.db.getCategoryAnalysis({ salesType }).then(d=>{ setData(Array.isArray(d) ? d : []); setLoading(false); }).catch(() => { setData([]); setLoading(false); });
+  }, [salesType]);
 
   const radarData = data.slice(0,6).map(d=>({
     category: d.category?.substring(0,10),
@@ -339,13 +357,14 @@ function CategoryTab() {
 }
 
 // ── Region ─────────────────────────────────────────────────────────────────────
-function RegionTab() {
+function RegionTab({ salesType }) {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    window.electron.db.getRegionAnalysis().then(d=>{ setData(Array.isArray(d) ? d : []); setLoading(false); });
-  }, []);
+    setLoading(true);
+    window.electron.db.getRegionAnalysis({ salesType }).then(d=>{ setData(Array.isArray(d) ? d : []); setLoading(false); }).catch(() => { setData([]); setLoading(false); });
+  }, [salesType]);
 
   return (
     <div style={{display:'flex',flexDirection:'column',gap:14}}>
@@ -402,13 +421,14 @@ function RegionTab() {
 }
 
 // ── Customer Analytics ─────────────────────────────────────────────────────────
-function CustomerAnalyticsTab() {
+function CustomerAnalyticsTab({ salesType }) {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    window.electron.db.getCustomerAnalytics().then(d=>{ setData(Array.isArray(d) ? d : []); setLoading(false); });
-  }, []);
+    setLoading(true);
+    window.electron.db.getCustomerAnalytics({ salesType }).then(d=>{ setData(Array.isArray(d) ? d : []); setLoading(false); }).catch(() => { setData([]); setLoading(false); });
+  }, [salesType]);
 
   const top = data.slice(0,10);
   const wholesale = data.filter(c=>c.customer_type==='Wholesale').reduce((s,c)=>s+c.total_spent,0);
@@ -498,27 +518,39 @@ const TABS = [
 
 export default function AnalyticsPage() {
   const [tab, setTab] = useState('timeseries');
+  const [salesType, setSalesType] = useState('');
 
   const CONTENT = {
-    timeseries: <TimeSeriesTab/>,
-    forecast:   <ForecastTab/>,
-    anomaly:    <AnomalyTab/>,
-    category:   <CategoryTab/>,
-    region:     <RegionTab/>,
-    customers:  <CustomerAnalyticsTab/>,
+    timeseries: <TimeSeriesTab salesType={salesType} />,
+    forecast:   <ForecastTab salesType={salesType} />,
+    anomaly:    <AnomalyTab salesType={salesType} />,
+    category:   <CategoryTab salesType={salesType} />,
+    region:     <RegionTab salesType={salesType} />,
+    customers:  <CustomerAnalyticsTab salesType={salesType} />,
   };
 
   return (
     <div style={{height:'100%',display:'flex',flexDirection:'column',overflow:'hidden'}}>
       <div style={{padding:'20px 24px 0',flexShrink:0}}>
         <PageHeader title="Analytics" subtitle="Advanced statistical analysis & business intelligence" icon={BarChart2} iconColor="var(--info)"/>
-        <div style={{display:'flex',borderBottom:'1px solid var(--border)',overflowX:'auto'}}>
-          {TABS.map(t=>(
-            <button key={t.id} onClick={()=>setTab(t.id)}
-              style={{display:'flex',alignItems:'center',gap:6,padding:'8px 16px',background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',fontSize:12,fontWeight:600,whiteSpace:'nowrap',transition:'all .15s',borderBottom:`2px solid ${tab===t.id?'var(--accent)':'transparent'}`,color:tab===t.id?'var(--accent)':'var(--text-secondary)'}}>
-              <t.icon size={13}/>{t.label}
-            </button>
-          ))}
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,marginTop:12,flexWrap:'wrap'}}>
+          <div>
+            <Select
+              value={salesType}
+              onChange={e => setSalesType(e.target.value)}
+              options={IMPORT_TYPES}
+              placeholder="All import types"
+              style={{width:220}}
+            />
+          </div>
+          <div style={{display:'flex',borderBottom:'1px solid var(--border)',overflowX:'auto',flex:1}}>
+            {TABS.map(t => (
+              <button key={t.id} onClick={() => setTab(t.id)}
+                style={{display:'flex',alignItems:'center',gap:6,padding:'8px 16px',background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',fontSize:12,fontWeight:600,whiteSpace:'nowrap',transition:'all .15s',borderBottom:`2px solid ${tab===t.id?'var(--accent)':'transparent'}`,color:tab===t.id?'var(--accent)':'var(--text-secondary)'}}>
+                <t.icon size={13}/>{t.label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
       <div style={{flex:1,overflowY:'auto',padding:'20px 24px 24px'}} className="scroll-area">

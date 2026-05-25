@@ -18,6 +18,8 @@ contextBridge.exposeInMainWorld('electron', {
     insertSales: (r) => invoke('db:insertSales', r),
     updateSale: (id, data) => invoke('db:updateSale', { id, data }),
     deleteSale: (id) => invoke('db:deleteSale', id),
+    deleteSalesByIds: (ids) => invoke('db:deleteSalesByIds', ids),
+    deleteSalesByFilter: (params) => invoke('db:deleteSalesByFilter', params),
     getCategoryAnalysis: () => invoke('db:getCategoryAnalysis'),
     getRegionAnalysis: () => invoke('db:getRegionAnalysis'),
     getTimeSeries: (p) => invoke('db:getTimeSeries', p),
