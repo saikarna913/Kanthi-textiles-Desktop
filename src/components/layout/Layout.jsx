@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { Outlet, NavLink } from 'react-router-dom';
-import { LayoutDashboard, ShoppingCart, Package, BarChart2, Upload, Sparkles, Users, PenLine, Table2, ChevronLeft, ChevronRight, Minus, Square, X, Layers, Sun, Moon } from 'lucide-react';
+import { LayoutDashboard, ShoppingCart, Package, BarChart2, Upload, Sparkles, Users, PenLine, Table2, ChevronLeft, ChevronRight, Minus, Square, X, Sun, Moon } from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';
 import clsx from 'clsx';
+import logo from '../../assets/app-logo.png';
 
 const NAV = [
   { path:'/dashboard', label:'Dashboard', icon:LayoutDashboard },
@@ -26,8 +27,8 @@ export default function Layout() {
       <div className="title-bar-drag h-10 flex items-center justify-between px-3 shrink-0 z-50"
         style={{background:'var(--bg-secondary)',borderBottom:'1px solid var(--border)'}}>
         <div className="flex items-center gap-2 title-bar-no-drag">
-          <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{background:'var(--accent)'}}>
-            <Layers size={14} className="text-white" />
+          <div className="w-7 h-7 rounded-lg overflow-hidden border border-white/10 flex items-center justify-center" style={{background:'white'}}>
+            <img src={logo} alt="Kanthi Textiles logo" className="w-5 h-5 object-contain" />
           </div>
           <span className="text-sm font-bold" style={{color:'var(--text-primary)'}}>Kanthi Textiles</span>
           <span className="text-xs font-mono px-1.5 py-0.5 rounded" style={{color:'var(--text-muted)',background:'var(--bg-hover)'}}>v2.0</span>

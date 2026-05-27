@@ -217,7 +217,7 @@ export default function ImportPage() {
 
   return (
     <div style={{height:'100%',overflowY:'auto',padding:24}} className="scroll-area">
-      <PageHeader title="Import Data" subtitle="Upload Excel or CSV files — supports your stock register format" icon={Upload} iconColor="var(--success)"
+      <PageHeader title="Import Data" subtitle="Upload Excel or CSV files — handle both invoice-level and monthly summary imports" icon={Upload} iconColor="var(--success)"
         actions={step>0 && <Button variant="ghost" size="sm" icon={RefreshCw} onClick={reset}>Start Over</Button>}/>
 
       {/* Step indicator */}
@@ -258,7 +258,7 @@ export default function ImportPage() {
               <h3 style={{fontSize:12,fontWeight:700,color:'var(--text-primary)',marginBottom:10}}>Supported Formats</h3>
               {[
                 {icon:'📊', title:'Standard Sales Excel', desc:'invoice, date, customer, product, amount columns'},
-              {icon:'📋', title:'Sales by Month', desc:'S.NO / STOCK ITEMS / TOTAL format (February-25 style)'},
+              {icon:'📋', title:'Sales by Month', desc:'S.NO / STOCK ITEMS / TOTAL summary format, mapped into monthly imports'},
                 {icon:'📄', title:'Custom Format', desc:'We auto-detect and map common column names'},
               ].map(f=>(
                 <div key={f.title} style={{display:'flex',gap:10,marginBottom:10}}>

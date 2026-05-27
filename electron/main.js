@@ -33,6 +33,7 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1440, height: 900, minWidth: 1100, minHeight: 700,
     frame: false, backgroundColor: '#0F1117',
+    icon: path.join(__dirname, '../logo.png'),
     webPreferences: {
       nodeIntegration: false, contextIsolation: true,
       preload: path.join(__dirname, 'preload.js'),
@@ -79,7 +80,7 @@ ipcMain.on('window:close', () => mainWindow?.close());
 // DB handlers
 const dbHandler = (channel, fn) => ipcMain.handle(channel, async (_, ...args) => { try { return fn(...args); } catch(e) { return { success: false, error: e.message }; } });
 
-dbHandler('db:getDashboardStats', () => dbService.getDashboardStats());
+dbHandler('db:getDashboardStats', (p) => dbService.getDashboardStats(p));
 dbHandler('db:getMonthlySales', (m) => dbService.getMonthlySales(m));
 dbHandler('db:getTopProducts', (l) => dbService.getTopProducts(l));
 dbHandler('db:getSalesData', (p) => dbService.getSalesData(p));
@@ -90,12 +91,12 @@ dbHandler('db:updateSale', ({id,data}) => dbService.updateSale(id,data));
 dbHandler('db:deleteSale', (id) => dbService.deleteSale(id));
 dbHandler('db:deleteSalesByIds', (ids) => dbService.deleteSalesByIds(ids));
 dbHandler('db:deleteSalesByFilter', (params) => dbService.deleteSalesByFilter(params));
-dbHandler('db:getCategoryAnalysis', () => dbService.getCategoryAnalysis());
-dbHandler('db:getRegionAnalysis', () => dbService.getRegionAnalysis());
+dbHandler('db:getCategoryAnalysis', (p) => dbService.getCategoryAnalysis(p));
+dbHandler('db:getRegionAnalysis', (p) => dbService.getRegionAnalysis(p));
 dbHandler('db:getTimeSeries', (p) => dbService.getTimeSeries(p));
 dbHandler('db:getForecasts', (p) => dbService.getForecasts(p));
-dbHandler('db:getAnomalies', () => dbService.getAnomalies());
-dbHandler('db:getCustomerAnalytics', () => dbService.getCustomerAnalytics());
+dbHandler('db:getAnomalies', (p) => dbService.getAnomalies(p));
+dbHandler('db:getCustomerAnalytics', (p) => dbService.getCustomerAnalytics(p));
 dbHandler('db:getCustomers', (p) => dbService.getCustomers(p));
 dbHandler('db:getCustomerById', (id) => dbService.getCustomerById(id));
 dbHandler('db:upsertCustomer', (d) => dbService.upsertCustomer(d));
