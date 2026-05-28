@@ -1,218 +1,311 @@
 const XLSX = require('xlsx');
-const path = require('path');
 
-// Robust number parser: strip currency symbols, thousands separators, handle
-// parentheses for negatives and non-breaking spaces. Returns NaN when unparsable.
-function parseNumber(v) {
-  if (v === undefined || v === null || v === '') return NaN;
-  let s = String(v).trim();
-  // handle (1,234.56) as negative
-  let neg = false;
-  if (/^\(.*\)$/.test(s)) { neg = true; s = s.replace(/^\(|\)$/g, ''); }
-  // normalize common separators and symbols
-  s = s.replace(/[,\s\u00A0]/g, ''); // remove commas and spaces (including NBSP)
-  s = s.replace(/₹|Rs\.?|INR/ig, '');
-  // remove any non-digit except dot and minus
-  s = s.replace(/[^0-9.\-]/g, '');
-  // if multiple dots, collapse extras (keep last as decimal)
-  const dots = (s.match(/\./g) || []).length;
-  if (dots > 1) {
-    const parts = s.split('.');
-    const dec = parts.pop();
-    s = parts.join('') + '.' + dec;
+function normalizeExcelDate(value) {
+  if (!value) return null;
+
+  // Excel serial date
+  if (typeof value === 'number') {
+    const utc_days = Math.floor(value - 25569);
+    const utc_value = utc_days * 86400;
+    const date_info = new Date(utc_value * 1000);
+    const year = date_info.getUTCFullYear();
+    const month = String(date_info.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(date_info.getUTCDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
   }
-  const n = parseFloat(s);
-  if (isNaN(n)) return NaN;
-  return neg ? -Math.abs(n) : n;
+
+  // String dates
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+    const parts = trimmed.split(/[\/\-]/);
+    if (parts.length === 3) {
+      let d = parts[0];
+      let m = parts[1];
+      let y = parts[2];
+      if (y.length === 2) y = `20${y}`;
+      return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    }
+    const parsed = new Date(trimmed);
+    if (!isNaN(parsed)) {
+      const year = parsed.getFullYear();
+      const month = String(parsed.getMonth() + 1).padStart(2, '0');
+      const day = String(parsed.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    }
+  }
+
+  return null;
 }
+
+function clean(v) {
+  if (v === undefined || v === null) return '';
+  return String(v).trim();
+}
+
+function num(v) {
+  if (v === undefined || v === null || v === '') return 0;
+  return parseFloat(String(v).replace(/,/g, '')) || 0;
+}
+
+// ── Canonical category names — match these exactly with what the UI filters use ──
+// The section header text in the Excel file is mapped to a canonical name.
+const CATEGORY_MAP = {
+  'KALAMKARI SAREES': 'KALAMKARI SAREES',
+  'KALAMKARI UNSTITCHED': 'KALAMKARI UNSTITCHED',
+  'READYMADES': 'READYMADES',
+  "MEN'S": "READYMADES - MEN'S",
+  "WOMEN'S TOPS/KURTHIS": "READYMADES - WOMEN'S TOPS/KURTHIS",
+  "WOMEN'S TOPS": "READYMADES - WOMEN'S TOPS/KURTHIS",
+  'BAGS': 'BAGS',
+  'BEDSHEETS': 'BEDSHEETS',
+  'HOME ACCESSORIES': 'HOME ACCESSORIES',
+  'TOWELS': 'TOWELS',
+  'KALAMKARI DUPATTAS': 'KALAMKARI DUPATTAS',
+  'LEISURE WARE': 'LEISURE WARE',
+  'CARPETS': 'CARPETS',
+  'POCHAMPALLI MATS': 'POCHAMPALLI MATS',
+  'POCHAMPALI MATS': 'POCHAMPALLI MATS',
+  'HANKIES': 'HANKIES',
+  'SAREES': 'SAREES',
+  'DRESS SETS': 'DRESS SETS',
+};
+
+/**
+ * Determine if a row is a category section header.
+ * Section headers in the Kanthi monthly sheet:
+ *   - Column B contains the category name in all-caps (or near)
+ *   - Column A is empty (or has the header text itself spread across merged cells)
+ *   - Column C (TOTAL) is empty or zero
+ *
+ * We detect them by checking if the trimmed text matches known category names
+ * OR if col A is blank and col C is blank/zero and col B is non-numeric.
+ */
+function detectCategory(rowCells) {
+  // rowCells: [colA, colB, colC, ...]
+  const a = clean(rowCells[0]).toUpperCase();
+  const b = clean(rowCells[1]).toUpperCase();
+  const c = clean(rowCells[2]);
+
+  const cNum = num(rowCells[2]);
+
+  // Direct match against known categories (col B)
+  for (const key of Object.keys(CATEGORY_MAP)) {
+    if (b === key.toUpperCase()) return CATEGORY_MAP[key];
+  }
+
+  // Also check if the joined row text matches (handles merged cells where text lands in col A)
+  for (const key of Object.keys(CATEGORY_MAP)) {
+    if (a === key.toUpperCase()) return CATEGORY_MAP[key];
+  }
+
+  // Heuristic: col A is empty, col C is empty or zero, col B is not a number
+  // and col B is not an S.NO style number
+  if (!a && b && cNum === 0 && isNaN(Number(rowCells[1]))) {
+    // Check it doesn't look like a sub-range line e.g. "RANGE (500-600)"
+    if (!b.includes('RANGE') && !b.includes('TOTAL') && b.length > 3) {
+      // Try partial match
+      for (const key of Object.keys(CATEGORY_MAP)) {
+        if (b.includes(key.toUpperCase()) || key.toUpperCase().includes(b)) {
+          return CATEGORY_MAP[key];
+        }
+      }
+      // Return the raw text capitalised as a fallback category
+      return clean(rowCells[1]).toUpperCase();
+    }
+  }
+
+  return null;
+}
+
 function parseFile(filePath) {
   try {
-    const wb = XLSX.readFile(filePath, { dateNF:'YYYY-MM-DD', cellDates:true, raw:false });
-    const sheet = wb.Sheets[wb.SheetNames[0]];
-    const raw = XLSX.utils.sheet_to_json(sheet, { raw:false, defval:'' });
-    if (!raw.length) return { success:false, error:'No data' };
-    const CMAP = {
-      'invoice no':'invoice_no','invoice_no':'invoice_no','date':'date','order date':'date','sale date':'date',
-      'customer name':'customer_name','customer':'customer_name','customer type':'customer_type',
-      'region':'region','state':'state','city':'city','product name':'product_name','item':'product_name',
-      'stock items':'product_name','category':'category','sub category':'sub_category','sku':'sku',
-      'quantity':'quantity','qty':'quantity','total':'total_amount','total amount':'total_amount',
-      'amount':'total_amount','sales':'total_amount','unit price':'unit_price','price':'unit_price',
-      'rate':'unit_price','discount':'discount','cost price':'cost_price','profit':'profit',
-      'payment mode':'payment_mode','payment':'payment_mode','sales rep':'sales_rep','notes':'notes',
-    };
-    const records = raw.map(row => {
-      const out = {};
-      for (const [k,v] of Object.entries(row)) {
-        const mk = CMAP[k.toLowerCase().trim()] || k.toLowerCase().trim().replace(/\s+/g,'_');
-        out[mk] = v;
-      }
-      if (out.date) { const d = new Date(out.date); if (!isNaN(d)) out.date = d.toISOString().split('T')[0]; }
-      ['quantity','unit_price','discount','total_amount','cost_price','profit'].forEach(f => {
-        if (out[f] !== undefined) {
-          // preserve raw value and parse to number robustly
-          out[`raw_${f}`] = out[f];
-          const parsed = parseNumber(out[f]);
-          out[f] = isNaN(parsed) ? 0 : parsed;
-        }
-      });
-      if (!out.total_amount && out.unit_price && out.quantity) out.total_amount = (out.unit_price-(out.discount||0))*out.quantity;
-      return out;
-    });
-    return { success:true, records, headers:Object.keys(raw[0]), totalRows:records.length, preview:records.slice(0,5), warnings:[] };
-  } catch(e) { return { success:false, error:e.message }; }
-}
+    const workbook = XLSX.readFile(filePath, { cellDates: false });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const raw = XLSX.utils.sheet_to_json(sheet, { defval: '' });
 
-// Parse your exact sales-by-month workbook format: each sheet is a month, each sheet has Month header, S.NO, STOCK ITEMS, TOTAL
-function parseSalesByMonth(filePath) {
-  try {
-    const wb = XLSX.readFile(filePath, { raw:true });
-    const sheetSummaries = [];
     const records = [];
 
-    const monthNameMap = {
-      JAN:0,FEB:1,MAR:2,APR:3,MAY:4,JUN:5,JUL:6,AUG:7,SEP:8,OCT:9,NOV:10,DEC:11,
-      JANUARY:0,FEBRUARY:1,MARCH:2,APRIL:3,MAY:4,JUNE:5,JULY:6,AUGUST:7,SEPTEMBER:8,OCTOBER:9,NOVEMBER:10,DECEMBER:11,
-    };
+    for (const row of raw) {
+      const quantity = num(row.quantity || row.Quantity || row.QTY);
+      const totalAmount = num(
+        row.total_amount || row.amount || row.Amount || row.Total
+      );
 
-    const normalizeMonthYear = (text) => {
-      if (!text) return null;
-      const trimmed = String(text||'').trim().toUpperCase().replace(/\s+/g,' ');
-      const direct = trimmed.replace('–','-').replace('\u2013','-').replace('\u2014','-');
-      const parts = direct.split(/[- ]+/).filter(Boolean);
-      if (parts.length >= 2) {
-        const year = parts[parts.length-1];
-        const monthPart = parts.slice(0, parts.length-1).join(' ');
-        const monthKey = monthPart.substring(0, 3);
-        const month = monthNameMap[monthPart] ?? monthNameMap[monthKey];
-        if (month !== undefined && /^\d{2,4}$/.test(year)) {
-          const fullYear = year.length === 2 ? 2000 + parseInt(year, 10) : parseInt(year, 10);
-          return `${monthPart.charAt(0)+monthPart.slice(1).toLowerCase()}-${fullYear}`;
-        }
-      }
-      const compactMatch = direct.match(/^([A-Z]{3,9})(\d{2,4})$/);
-      if (compactMatch) {
-        const monthPart = compactMatch[1];
-        const year = compactMatch[2];
-        const monthKey = monthPart.substring(0, 3);
-        const month = monthNameMap[monthPart] ?? monthNameMap[monthKey];
-        if (month !== undefined) {
-          const fullYear = year.length === 2 ? 2000 + parseInt(year, 10) : parseInt(year, 10);
-          const monthText = monthPart.charAt(0)+monthPart.slice(1).toLowerCase();
-          return `${monthText}-${fullYear}`;
-        }
-      }
-      if (monthNameMap[trimmed] !== undefined) {
-        return `${trimmed.charAt(0)+trimmed.slice(1).toLowerCase()}-${new Date().getFullYear()}`;
-      }
-      return null;
-    };
+      records.push({
+        invoice_no: clean(row.invoice_no || row.Invoice || row['Invoice No']),
+        date: normalizeExcelDate(row.date || row.Date),
+        customer_name: clean(row.customer_name || row.Customer || row['Customer Name']),
+        product_name: clean(row.product_name || row.Product || row.Item),
+        category: clean(row.category),
+        quantity,
+        unit_price: num(row.unit_price || row['Unit Price']),
+        total_amount: totalAmount,
+        profit: num(row.profit),
+        payment_mode: clean(row.payment_mode || row.Payment),
+        sales_type: 'sales',
+      });
+    }
 
-    const parseSheet = (sheetName) => {
-      const sheet = wb.Sheets[sheetName];
-      const rows = XLSX.utils.sheet_to_json(sheet, { header:1, raw:true, defval:'' });
-      let monthYear = normalizeMonthYear(sheetName);
-      let currentCategory = '';
-      const sheetRecords = [];
-      const warnings = [];
-
-      const headerPatterns = [/^S\.?NO$/i, /^STOCK\s*ITEMS$/i, /^TOTAL$/i, /^MONTH$/i, /^CATALOGUE$/i];
-      const isHeaderRow = (cols) => {
-        const normalized = cols.map(c => String(c||'').trim().toUpperCase());
-        return normalized.some(v => headerPatterns.some(rx => rx.test(v))) && normalized.filter(Boolean).length >= 2;
-      };
-
-      for (const row of rows) {
-        const cols = row.map(c => String(c||'').trim());
-        if (!monthYear && cols[0] && /^[A-Z][A-Z ]+[ -–—]?[0-9]{2,4}$/.test(cols[0].toUpperCase())) {
-          monthYear = normalizeMonthYear(cols[0]);
-          continue;
-        }
-
-        if (isHeaderRow(cols)) {
-          continue;
-        }
-
-        const sno = cols[0];
-        const itemName = cols[1] || cols[0];
-        const total = cols[2] !== undefined ? cols[2] : '';
-        const totalValue = parseNumber(total);
-        if (!sno && itemName && (total === '' || isNaN(totalValue))) {
-          currentCategory = itemName.trim();
-          continue;
-        }
-
-        if (sno && !isNaN(parseInt(sno, 10)) && itemName) {
-          if (!isNaN(totalValue) || String(total).trim() === '0') {
-            let saleDate = new Date();
-            if (monthYear) {
-              const parts = monthYear.split('-');
-              const monthKey = parts[0].substring(0, 3).toUpperCase();
-              const month = monthNameMap[monthKey] ?? 0;
-              const year = parseInt(parts[1], 10) || new Date().getFullYear();
-              saleDate = new Date(year, month, 1);
-            }
-            const mappedValue = isNaN(totalValue) ? 0 : totalValue;
-            sheetRecords.push({
-              date: saleDate.toISOString().split('T')[0],
-              product_name: itemName.trim(),
-              category: currentCategory,
-              total_amount: mappedValue,
-              quantity: mappedValue,
-              raw_total: cols[2],
-              customer_name: '',
-              payment_mode: 'Cash',
-            });
-          }
-          continue;
-        }
-      }
-
-      if (!sheetRecords.length) {
-        warnings.push(`Sheet '${sheetName}' contained no sales rows.`);
-      }
-
-      sheetSummaries.push({ sheetName, monthYear: monthYear || sheetName, rows: sheetRecords.length });
-      records.push(...sheetRecords);
-      return warnings;
-    };
-
-    const allWarnings = [];
-    wb.SheetNames.forEach(sheetName => {
-      const warnings = parseSheet(sheetName);
-      allWarnings.push(...warnings);
-    });
-
-    const monthYear = sheetSummaries.map(s => s.monthYear).filter(Boolean).join(', ');
     return {
-      success:true,
+      success: true,
       records,
-      monthYear,
       totalRows: records.length,
       preview: records.slice(0, 10),
-      warnings: allWarnings,
-      sheetSummaries,
     };
-  } catch(e) { return { success:false, error:e.message }; }
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
 }
 
-function exportToExcel(data, columns, filePath, sheetName = 'Data') {
+/**
+ * parseSalesByMonth — parses the Kanthi monthly stock sheet format:
+ *
+ *   Row 1:  "MARCH-25" (month/year title — may be in col A or B)
+ *   Row 2:  S.NO  |  STOCK ITEMS  |  TOTAL
+ *   Row 3:  (empty A) | KALAMKARI SAREES | (empty C)  ← category header
+ *   Row 4:  1  |  MALMAL SAREE (S.P)  |  573          ← product row
+ *   ...
+ *
+ * Key rules:
+ *   - Category headers: col A empty, col C empty/zero, col B is category name
+ *   - Product rows: col A is a number (S.NO), col B is product name, col C is quantity
+ *   - Sub-range rows: col B contains "RANGE" — skip
+ *   - Summary/total rows: col B contains "TOTAL" — skip
+ *   - Zero-quantity rows are included (products that sold 0 units are valid data)
+ */
+function parseSalesByMonth(filePath) {
   try {
-    const headers = columns.map(c => c.header||c.key);
-    const rows = data.map(row => columns.map(c => row[c.key]??''));
-    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
-    ws['!cols'] = columns.map(c => ({ wch: Math.max(c.width||15, (c.header||c.key).length+2) }));
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, sheetName);
-    const sumSheet = XLSX.utils.aoa_to_sheet([
-      ['Kanthi Textiles Export'],['Generated:', new Date().toLocaleString()],
-      ['Records:', data.length],
-      ['Total Sales:', data.reduce((s,r)=>s+(parseFloat(r.total_amount)||0),0).toFixed(2)],
-    ]);
-    XLSX.utils.book_append_sheet(wb, sumSheet, 'Summary');
-    XLSX.writeFile(wb, filePath);
-    return { success:true, path:filePath, rows:data.length };
-  } catch(e) { return { success:false, error:e.message }; }
+    const workbook = XLSX.readFile(filePath, { cellDates: false });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+
+    const rows = XLSX.utils.sheet_to_json(sheet, {
+      header: 1,
+      defval: '',
+      raw: true,
+    });
+
+    let detectedMonthDate = null; // "YYYY-MM-01"
+    let currentCategory = '';    // current section category name
+    const records = [];
+    const warnings = [];
+
+    // ── Month name → 2-digit month number ────────────────────────────────
+    const MONTH_MAP = {
+      JANUARY: '01', FEBRUARY: '02', MARCH: '03', APRIL: '04',
+      MAY: '05', JUNE: '06', JULY: '07', AUGUST: '08',
+      SEPTEMBER: '09', OCTOBER: '10', NOVEMBER: '11', DECEMBER: '12',
+    };
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      if (!row || !row.length) continue;
+
+      // ── 1. Detect month from any cell in the row ──────────────────────
+      const joined = row.map(c => clean(c)).join(' ').toUpperCase();
+
+      // Pattern: "MARCH-25", "MARCH 2025", "MARCH-2025", etc.
+      const monthMatch = joined.match(
+        /\b(JANUARY|FEBRUARY|MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER)[\s\-]*(20)?(\d{2})\b/
+      );
+      if (monthMatch) {
+        const monthName = monthMatch[1];
+        const yearSuffix = monthMatch[3];
+        const year = yearSuffix.length === 2 ? `20${yearSuffix}` : yearSuffix;
+        const month = MONTH_MAP[monthName];
+        detectedMonthDate = `${year}-${month}-01`;
+        continue; // title row, not a data row
+      }
+
+      // ── 2. Skip the header row (S.NO / STOCK ITEMS / TOTAL) ──────────
+      const b = clean(row[1]).toUpperCase();
+      if (b === 'STOCK ITEMS' || b === 'ITEMS') continue;
+
+      // ── 3. Skip sub-range / sub-total rows ───────────────────────────
+      if (b.includes('RANGE') || b.includes('TOTAL')) {
+        warnings.push(`Row ${i + 1}: skipped — "${clean(row[1])}"`);
+        continue;
+      }
+
+      // ── 4. Detect category section header ────────────────────────────
+      const detectedCat = detectCategory(row);
+      if (detectedCat) {
+        currentCategory = detectedCat;
+        continue; // header row, not a product row
+      }
+
+      // ── 5. Product rows: col B must be a non-empty product name ──────
+      const productName = clean(row[1]);
+      if (!productName) continue;
+
+      // col C is the TOTAL (units sold). Accept 0 as a valid value.
+      const rawQty = row[2];
+      const quantity = num(rawQty);
+
+      // col A is S.NO (a number) — validate this looks like a product row
+      const sno = clean(row[0]);
+      const snoIsNumber = sno !== '' && !isNaN(Number(sno));
+
+      // If col A is empty and col C is empty, this might be a stray row — skip
+      if (!snoIsNumber && quantity === 0 && !productName) continue;
+
+      records.push({
+        date: detectedMonthDate,
+        product_name: productName,
+        category: currentCategory,
+        quantity,        // units sold (stored as quantity in the importer)
+        total_amount: 0, // not available in this format
+        unit_price: 0,
+        profit: 0,
+        sales_type: 'sales_by_month',
+      });
+    }
+
+    if (!detectedMonthDate) {
+      warnings.push('Could not detect month/year from the sheet. Import will use today\'s date.');
+    }
+
+    return {
+      success: true,
+      records,
+      totalRows: records.length,
+      preview: records.slice(0, 10),
+      monthYear: detectedMonthDate,
+      importDates: detectedMonthDate ? [detectedMonthDate] : [],
+      warnings: warnings.length ? warnings : undefined,
+    };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
 }
 
-module.exports = { parseFile, parseStockRegister: parseSalesByMonth, parseSalesByMonth, exportToExcel };
+// Keep parseStockRegister as alias for backwards compatibility
+const parseStockRegister = parseSalesByMonth;
+
+function exportToExcel(data, columns, filePath, sheetName = 'Sheet1') {
+  try {
+    const rows = data.map(row => {
+      const obj = {};
+      for (const col of columns) {
+        obj[col.header] = row[col.key];
+      }
+      return obj;
+    });
+
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
+    XLSX.writeFile(workbook, filePath);
+
+    return { success: true, rows: data.length };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+}
+
+module.exports = {
+  parseFile,
+  parseSalesByMonth,
+  parseStockRegister,
+  exportToExcel,
+};

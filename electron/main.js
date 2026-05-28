@@ -19,8 +19,9 @@ function loadServices() {
     dbService = require('./database')(appDataPath);
     excelService = require('./excel');
     console.log('Services loaded');
-    // Validate DB service exports to catch missing functions early
-    const expectedDbFns = ['getDashboardStats','getMonthlySales','getTopProducts','getSalesData','getSaleById','insertSale','insertSales','updateSale','deleteSale','deleteSalesByIds','deleteSalesByFilter'];
+    const expectedDbFns = ['getDashboardStats', 'getMonthlySales', 'getTopProducts', 'getSalesData',
+      'getSaleById', 'insertSale', 'insertSales', 'updateSale', 'deleteSale', 'deleteSalesByIds',
+      'deleteSalesByFilter', 'deleteAllSales'];
     const missing = expectedDbFns.filter(n => typeof dbService[n] !== 'function');
     if (missing.length) console.warn('DB service missing expected functions:', missing.join(', '));
   } catch (err) { console.error('Services load failed:', err); }
@@ -43,33 +44,19 @@ function createWindow() {
   const startURL = isDev ? 'http://localhost:3000' : `file://${path.join(__dirname, '../build/index.html')}`;
   console.log('Loading URL:', startURL);
   mainWindow.loadURL(startURL);
-  mainWindow.webContents.once('did-finish-load', () => {
-    console.log('Window finished loading content');
-  });
+  mainWindow.webContents.once('did-finish-load', () => console.log('Window finished loading content'));
   mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL, isMainFrame) => {
     console.error('[WINDOW] did-fail-load', { errorCode, errorDescription, validatedURL, isMainFrame });
   });
   mainWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
     console.log('[RENDERER]', { level, message, line, sourceId });
   });
-  if (isDev) {
-    mainWindow.webContents.openDevTools();
-  }
-  mainWindow.once('ready-to-show', () => { 
-    console.log('Window ready-to-show, displaying...');
-    mainWindow.show(); 
-  });
-  mainWindow.on('closed', () => { 
-    console.log('Window closed');
-    mainWindow = null; 
-  });
+  if (isDev) mainWindow.webContents.openDevTools();
+  mainWindow.once('ready-to-show', () => { console.log('Window ready-to-show'); mainWindow.show(); });
+  mainWindow.on('closed', () => { console.log('Window closed'); mainWindow = null; });
 }
 
-app.whenReady().then(() => { 
-  loadServices(); 
-  createWindow();
-  console.log('App ready, mainWindow created');
-});
+app.whenReady().then(() => { loadServices(); createWindow(); console.log('App ready'); });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 
 // Window controls
@@ -77,9 +64,12 @@ ipcMain.on('window:minimize', () => mainWindow?.minimize());
 ipcMain.on('window:maximize', () => mainWindow?.isMaximized() ? mainWindow.unmaximize() : mainWindow?.maximize());
 ipcMain.on('window:close', () => mainWindow?.close());
 
-// DB handlers
-const dbHandler = (channel, fn) => ipcMain.handle(channel, async (_, ...args) => { try { return fn(...args); } catch(e) { return { success: false, error: e.message }; } });
+// DB handler factory
+const dbHandler = (channel, fn) => ipcMain.handle(channel, async (_, ...args) => {
+  try { return fn(...args); } catch (e) { return { success: false, error: e.message }; }
+});
 
+// Core sales
 dbHandler('db:getDashboardStats', (p) => dbService.getDashboardStats(p));
 dbHandler('db:getMonthlySales', (m) => dbService.getMonthlySales(m));
 dbHandler('db:getTopProducts', (l) => dbService.getTopProducts(l));
@@ -87,89 +77,70 @@ dbHandler('db:getSalesData', (p) => dbService.getSalesData(p));
 dbHandler('db:getSaleById', (id) => dbService.getSaleById(id));
 dbHandler('db:insertSale', (d) => dbService.insertSale(d));
 dbHandler('db:insertSales', (r) => dbService.insertSales(r));
-dbHandler('db:updateSale', ({id,data}) => dbService.updateSale(id,data));
+dbHandler('db:updateSale', ({ id, data }) => dbService.updateSale(id, data));
 dbHandler('db:deleteSale', (id) => dbService.deleteSale(id));
 dbHandler('db:deleteSalesByIds', (ids) => dbService.deleteSalesByIds(ids));
 dbHandler('db:deleteSalesByFilter', (params) => dbService.deleteSalesByFilter(params));
+dbHandler('db:deleteAllSales', () => dbService.deleteAllSales());
+
+// Analytics
 dbHandler('db:getCategoryAnalysis', (p) => dbService.getCategoryAnalysis(p));
 dbHandler('db:getRegionAnalysis', (p) => dbService.getRegionAnalysis(p));
 dbHandler('db:getTimeSeries', (p) => dbService.getTimeSeries(p));
 dbHandler('db:getForecasts', (p) => dbService.getForecasts(p));
 dbHandler('db:getAnomalies', (p) => dbService.getAnomalies(p));
 dbHandler('db:getCustomerAnalytics', (p) => dbService.getCustomerAnalytics(p));
+dbHandler('db:getProductMonthlySales', (p) => dbService.getProductMonthlySales(p));
+dbHandler('db:getMonthOverMonth', (p) => dbService.getMonthOverMonth(p));
+dbHandler('db:getCategoryMonthly', (p) => dbService.getCategoryMonthly(p));
+
+// Customers
 dbHandler('db:getCustomers', (p) => dbService.getCustomers(p));
 dbHandler('db:getCustomerById', (id) => dbService.getCustomerById(id));
 dbHandler('db:upsertCustomer', (d) => dbService.upsertCustomer(d));
 dbHandler('db:deleteCustomer', (id) => dbService.deleteCustomer(id));
+
+// Inventory
 dbHandler('db:getInventory', (p) => dbService.getInventory(p));
 dbHandler('db:upsertInventoryItem', (d) => dbService.upsertInventoryItem(d));
 dbHandler('db:deleteInventoryItem', (id) => dbService.deleteInventoryItem(id));
 dbHandler('db:addInventoryTransaction', (d) => dbService.addInventoryTransaction(d));
 dbHandler('db:getInventoryTransactions', (id) => dbService.getInventoryTransactions(id));
 dbHandler('db:getInventoryCategories', () => dbService.getInventoryCategories());
-dbHandler('db:importStockRegister', ({records,monthYear}) => dbService.importStockRegister(records,monthYear));
-dbHandler('db:createDynamicTable', ({tableName,displayName,columns,description}) => dbService.createDynamicTable(tableName,displayName,columns,description));
+dbHandler('db:importStockRegister', ({ records, monthYear }) => dbService.importStockRegister(records, monthYear));
+
+// Dynamic tables
+dbHandler('db:createDynamicTable', ({ tableName, displayName, columns, description }) => dbService.createDynamicTable(tableName, displayName, columns, description));
 dbHandler('db:getDynamicTables', () => dbService.getDynamicTables());
-dbHandler('db:getDynamicTableData', ({tableName,params}) => dbService.getDynamicTableData(tableName,params));
-dbHandler('db:insertDynamicRow', ({tableName,data}) => dbService.insertDynamicRow(tableName,data));
-dbHandler('db:deleteDynamicRow', ({tableName,id}) => dbService.deleteDynamicRow(tableName,id));
+dbHandler('db:getDynamicTableData', ({ tableName, params }) => dbService.getDynamicTableData(tableName, params));
+dbHandler('db:insertDynamicRow', ({ tableName, data }) => dbService.insertDynamicRow(tableName, data));
+dbHandler('db:deleteDynamicRow', ({ tableName, id }) => dbService.deleteDynamicRow(tableName, id));
 dbHandler('db:deleteDynamicTable', (name) => dbService.deleteDynamicTable(name));
-dbHandler('db:runQuery', (sql) => dbService.runRawQuery(sql));
 dbHandler('db:getSeedStatus', () => dbService.getSeedStatus());
 dbHandler('db:seedDemoData', () => dbService.seedDemoData());
 
 // Excel handlers
-ipcMain.handle('excel:test', async (event) => {
-  console.log('[TEST] 1. Handler invoked');
-  try {
-    console.log('[TEST] 2. In try block');
-    console.log('[TEST] 3. mainWindow check:', mainWindow ? 'EXISTS' : 'NULL');
-    console.log('[TEST] 4. isDev =', isDev);
-    console.log('[TEST] 5. Building result object');
-    const result = { success: true, mainWindow: !!mainWindow, isDev };
-    console.log('[TEST] 6. Result object created:', result);
-    console.log('[TEST] 7. About to return');
-    return result;
-  } catch(e) {
-    console.error('[TEST] ERROR - caught exception:', e.message);
-    console.error('[TEST] ERROR - stack:', e.stack);
-    return null;
-  }
+ipcMain.handle('excel:test', async () => {
+  try { return { success: true, mainWindow: !!mainWindow, isDev }; }
+  catch (e) { return null; }
 });
 
 ipcMain.handle('excel:openFileDialog', async () => {
   try {
-    console.log('[DIALOG] Starting file dialog...');
-    console.log('[DIALOG] mainWindow is:', mainWindow ? 'READY' : 'NULL');
-    
-    if (!mainWindow) {
-      console.error('[DIALOG] ERROR: mainWindow is null!');
-      return null;
-    }
-
-    console.log('[DIALOG] Calling dialog.showOpenDialog...');
-    const r = await dialog.showOpenDialog(mainWindow, { 
-      title: 'Select Excel File', 
+    if (!mainWindow) { console.error('[DIALOG] ERROR: mainWindow is null!'); return null; }
+    const r = await dialog.showOpenDialog(mainWindow, {
+      title: 'Select Excel File',
       filters: [
         { name: 'Excel Files', extensions: ['xlsx', 'xls'] },
         { name: 'CSV Files', extensions: ['csv'] },
         { name: 'All Files', extensions: ['*'] }
-      ], 
-      properties: ['openFile'] 
+      ],
+      properties: ['openFile']
     });
-    
-    console.log('[DIALOG] Dialog returned - canceled:', r.canceled, 'files:', r.filePaths.length);
-    if (r.filePaths.length > 0) {
-      console.log('[DIALOG] Selected file:', r.filePaths[0]);
-    }
-    
     return r.canceled ? null : r.filePaths[0];
-  } catch(e) {
-    console.error('[DIALOG] ERROR:', e.message);
-    console.error('[DIALOG] Stack:', e.stack);
-    return null;
-  }
+  } catch (e) { console.error('[DIALOG] ERROR:', e.message); return null; }
 });
+
 ipcMain.handle('excel:parseFile', async (_, filePath) => excelService.parseFile(filePath));
 ipcMain.handle('excel:parseStockRegister', async (_, filePath) => excelService.parseStockRegister(filePath));
 ipcMain.handle('excel:parseSalesByMonth', async (_, filePath) => {
@@ -178,8 +149,13 @@ ipcMain.handle('excel:parseSalesByMonth', async (_, filePath) => {
   }
   return excelService.parseStockRegister(filePath);
 });
+
 ipcMain.handle('excel:exportData', async (_, opts) => {
-  const r = await dialog.showSaveDialog(mainWindow, { title:'Save Export', defaultPath: path.join(app.getPath('downloads'), opts.filename||'export.xlsx'), filters:[{name:'Excel',extensions:['xlsx']}] });
+  const r = await dialog.showSaveDialog(mainWindow, {
+    title: 'Save Export',
+    defaultPath: path.join(app.getPath('downloads'), opts.filename || 'export.xlsx'),
+    filters: [{ name: 'Excel', extensions: ['xlsx'] }]
+  });
   if (r.canceled) return null;
   const res = excelService.exportToExcel(opts.data, opts.columns, r.filePath, opts.sheetName);
   if (res.success) shell.showItemInFolder(r.filePath);

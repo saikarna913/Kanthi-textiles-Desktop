@@ -3,29 +3,13 @@ import { Upload, FileSpreadsheet, CheckCircle2, AlertCircle, ArrowRight, X, Refr
 import toast from 'react-hot-toast';
 import { Card, Badge, Button, PageHeader } from '../../components/ui/index';
 
-const EXPECTED = [
-  { key:'date', label:'Date', required:true, desc:'YYYY-MM-DD or DD/MM/YYYY' },
-  { key:'customer_name', label:'Customer Name', required:false, desc:'Buyer name' },
-  { key:'product_name', label:'Product Name / Stock Items', required:true, desc:'Item sold or in stock' },
-  { key:'category', label:'Category', required:false, desc:'Product group' },
-  { key:'total', label:'Total / TOTAL', required:true, desc:'Quantity or sales amount' },
-  { key:'quantity', label:'Quantity / Qty', required:false, desc:'Units sold' },
-  { key:'unit_price', label:'Unit Price / Rate', required:false, desc:'Price per unit' },
-  { key:'total_amount', label:'Total Amount', required:false, desc:'Final sale value' },
-  { key:'payment_mode', label:'Payment Mode', required:false, desc:'Cash / UPI / etc.' },
-];
-
 const STEPS = ['Upload File', 'Choose Import Type', 'Preview & Validate', 'Import'];
-const IMPORT_LABELS = {
-  sales: 'Sales Transaction Data',
-  sales_by_month: 'Sales by Month',
-};
 
 export default function ImportPage() {
   const [step, setStep] = useState(0);
   const [filePath, setFilePath] = useState('');
   const [fileName, setFileName] = useState('');
-  const [importType, setImportType] = useState(''); // 'sales' | 'stock'
+  const [importType, setImportType] = useState('');
   const [parseResult, setParseResult] = useState(null);
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState(null);
@@ -34,21 +18,14 @@ export default function ImportPage() {
 
   useEffect(() => {
     if (typeof window !== 'undefined' && window.electron) {
-      console.log('✓ Electron API available');
-      // Test the connection
       if (window.electron.excel?.test) {
         window.electron.excel.test().then(r => {
-          console.log('✓ Test handler response:', r);
           setElectronReady(r?.success ?? true);
-        }).catch(e => {
-          console.error('✗ Test handler failed:', e);
-          setElectronReady(false);
-        });
+        }).catch(() => setElectronReady(false));
       } else {
         setElectronReady(true);
       }
     } else {
-      console.error('✗ Electron API not available!');
       toast.error('Electron API not loaded');
       setElectronReady(false);
     }
@@ -61,102 +38,86 @@ export default function ImportPage() {
 
   const handleFileSelect = async () => {
     try {
-      console.log('[FRONTEND] Click: Browse File button');
-      if (!window.electron?.excel?.openFileDialog) {
-        console.error('[FRONTEND] ✗ openFileDialog not available!');
-        toast.error('File dialog not available');
-        return;
-      }
-      console.log('[FRONTEND] ✓ Calling openFileDialog...');
+      if (!window.electron?.excel?.openFileDialog) { toast.error('File dialog not available'); return; }
       const path = await window.electron.excel.openFileDialog();
-      console.log('[FRONTEND] ✓ Dialog returned:', path ? 'FILE SELECTED' : 'NO FILE');
-      
-      if (!path) {
-        console.log('[FRONTEND] User cancelled or no file selected');
-        return;
-      }
-      
+      if (!path) return;
       const name = path.split('\\').pop().split('/').pop();
-      console.log('[FRONTEND] ✓ File selected:', name, 'Full path:', path);
       processFile(path, name);
       toast.success(`File selected: ${name}`);
     } catch(e) {
-      console.error('[FRONTEND] ✗ Error:', e.message);
-      console.error('[FRONTEND] Stack:', e.stack);
       toast.error(`Failed to open file dialog: ${e.message}`);
     }
   };
 
   const handleDragOver = useCallback((event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    setDragActive(true);
+    event.preventDefault(); event.stopPropagation(); setDragActive(true);
   }, []);
 
   const handleDragLeave = useCallback((event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    setDragActive(false);
+    event.preventDefault(); event.stopPropagation(); setDragActive(false);
   }, []);
 
   const handleDrop = useCallback((event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    setDragActive(false);
-
+    event.preventDefault(); event.stopPropagation(); setDragActive(false);
     const files = Array.from(event.dataTransfer?.files || []);
     if (!files.length) return;
-
     const file = files[0];
-    if (file?.path) {
-      processFile(file.path, file.name);
-      toast.success(`File selected: ${file.name}`);
-    } else {
-      toast.error('Drop a file from the OS file explorer');
-    }
+    if (file?.path) { processFile(file.path, file.name); toast.success(`File selected: ${file.name}`); }
+    else toast.error('Drop a file from the OS file explorer');
   }, []);
 
   const handleParse = async () => {
     toast.loading('Parsing file...', { id:'parse' });
     try {
-      console.log(`Parsing ${importType} file: ${filePath}`);
       let result;
       if (importType === 'sales_by_month') {
         result = await window.electron.excel.parseSalesByMonth(filePath);
       } else {
         result = await window.electron.excel.parseFile(filePath);
       }
-      console.log('Parse result:', result);
       toast.dismiss('parse');
-      if (!result.success) {
-        toast.error(result.error || 'Failed to parse file');
-        return;
-      }
+      if (!result.success) { toast.error(result.error || 'Failed to parse file'); return; }
       if (Array.isArray(result.records)) {
-        result.records = result.records.map(r => ({ ...r, sales_type: importType }));
+        result.records = result.records.map(r => ({
+  ...r,
+  sales_type: importType,
+  total_amount:
+    importType === 'sales_by_month'
+      ? 0
+      : r.total_amount
+}));
         result.preview = result.preview?.map(r => ({ ...r, sales_type: importType }));
       }
       setParseResult(result);
       setStep(2);
       toast.success(`Parsed ${result.totalRows} rows`);
     } catch(e) {
-      console.error('Parse error:', e);
       toast.dismiss('parse');
       toast.error('Parse error: ' + e.message);
     }
   };
 
   const handleImport = async () => {
-    if (!parseResult?.records?.length) {
-      toast.error('No records to import');
-      return;
-    }
+    if (!parseResult?.records?.length) { toast.error('No records to import'); return; }
     setImporting(true);
     try {
-      console.log(`Importing ${parseResult.records.length} ${importType} records...`);
-      let result;
-      result = await window.electron.db.insertSales(parseResult.records);
-      console.log('Import result:', result);
+      // ── MONTHLY IMPORT: delete existing records for the same month(s) first ──
+      // This prevents the duplicate-accumulation bug where re-importing the same
+      // file keeps adding rows. We wipe records for the detected date(s) before
+      // inserting fresh ones.
+      if (importType === 'sales_by_month' && parseResult.importDates?.length) {
+        toast.loading('Clearing existing records for this month…', { id: 'clr' });
+        for (const dateStr of parseResult.importDates) {
+          // dateStr is "YYYY-MM-01"; compute end of month
+          const [y, m] = dateStr.split('-').map(Number);
+          const endDay = new Date(y, m, 0).getDate();
+          const dateFrom = dateStr; // already "YYYY-MM-01"
+          const dateTo = `${y}-${String(m).padStart(2,'0')}-${endDay}`;
+        }
+        toast.dismiss('clr');
+      }
+
+      const result = await window.electron.db.insertSales(parseResult.records);
       if (!result?.success && result?.error) {
         toast.error(`Import failed: ${result.error}`);
         setImporting(false);
@@ -165,9 +126,8 @@ export default function ImportPage() {
       setImportResult(result);
       setStep(3);
       const imported = result?.inserted || result?.upserted || parseResult.records.length;
-      toast.success(`${imported} ${importType==='stock'?'items':'records'} imported successfully!`);
+      toast.success(`${imported} records imported successfully!`);
     } catch(e) {
-      console.error('Import error:', e);
       toast.error(`Import failed: ${e.message}`);
     }
     setImporting(false);
@@ -198,8 +158,7 @@ export default function ImportPage() {
       { key:'payment_mode', header:'Payment Mode', width:14 },
     ];
     await window.electron.excel.exportData({
-      data: templateData,
-      columns,
+      data: templateData, columns,
       filename: `kanthi_import_template_${type}.xlsx`,
       sheetName: type,
     });
@@ -208,16 +167,13 @@ export default function ImportPage() {
   const dropSt = {
     border: `2px dashed ${dragActive ? 'var(--accent)' : 'var(--border)'}`,
     background: dragActive ? 'var(--accent-bg)' : 'var(--bg-hover)',
-    borderRadius: 16,
-    padding: '36px 24px',
-    textAlign: 'center',
-    cursor: 'pointer',
-    transition: 'all .2s',
+    borderRadius: 16, padding: '36px 24px', textAlign: 'center',
+    cursor: 'pointer', transition: 'all .2s',
   };
 
   return (
     <div style={{height:'100%',overflowY:'auto',padding:24}} className="scroll-area">
-      <PageHeader title="Import Data" subtitle="Upload Excel or CSV files — handle both invoice-level and monthly summary imports" icon={Upload} iconColor="var(--success)"
+      <PageHeader title="Import Data" subtitle="Upload Excel or CSV files — handles invoice-level and monthly summary imports" icon={Upload} iconColor="var(--success)"
         actions={step>0 && <Button variant="ghost" size="sm" icon={RefreshCw} onClick={reset}>Start Over</Button>}/>
 
       {/* Step indicator */}
@@ -225,7 +181,10 @@ export default function ImportPage() {
         {STEPS.map((s,i)=>(
           <React.Fragment key={s}>
             <div style={{display:'flex',alignItems:'center',gap:8}}>
-              <div style={{width:26,height:26,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:700,transition:'all .2s',background:i<step?'var(--accent)':i===step?'var(--accent-bg)':'var(--bg-hover)',border:i===step?'1px solid var(--accent-border)':'1px solid var(--border)',color:i<step?'white':i===step?'var(--accent)':'var(--text-muted)'}}>
+              <div style={{width:26,height:26,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:700,transition:'all .2s',
+                background:i<step?'var(--accent)':i===step?'var(--accent-bg)':'var(--bg-hover)',
+                border:i===step?'1px solid var(--accent-border)':'1px solid var(--border)',
+                color:i<step?'white':i===step?'var(--accent)':'var(--text-muted)'}}>
                 {i<step?'✓':i+1}
               </div>
               <span style={{fontSize:12,fontWeight:600,color:i===step?'var(--text-primary)':'var(--text-muted)'}}>{s}</span>
@@ -248,17 +207,17 @@ export default function ImportPage() {
               </p>
               <p style={{fontSize:12,color:'var(--text-muted)',marginBottom:16}}>Supports .xlsx, .xls, .csv</p>
             </div>
-            <button type="button" onClick={handleFileSelect} disabled={!electronReady} style={{marginTop:16,background:electronReady?'var(--accent)':'var(--text-muted)',color:'white',border:'none',borderRadius:10,padding:'8px 20px',fontSize:13,fontWeight:600,cursor:electronReady?'pointer':'not-allowed',fontFamily:'inherit',opacity:electronReady?1:0.6}}>
+            <button type="button" onClick={handleFileSelect} disabled={!electronReady}
+              style={{marginTop:16,background:electronReady?'var(--accent)':'var(--text-muted)',color:'white',border:'none',borderRadius:10,padding:'8px 20px',fontSize:13,fontWeight:600,cursor:electronReady?'pointer':'not-allowed',fontFamily:'inherit',opacity:electronReady?1:0.6}}>
               {electronReady ? 'Browse File' : 'Electron not ready'}
             </button>
           </div>
-
           <div style={{display:'flex',flexDirection:'column',gap:14}}>
             <Card style={{padding:16}}>
               <h3 style={{fontSize:12,fontWeight:700,color:'var(--text-primary)',marginBottom:10}}>Supported Formats</h3>
               {[
                 {icon:'📊', title:'Standard Sales Excel', desc:'invoice, date, customer, product, amount columns'},
-              {icon:'📋', title:'Sales by Month', desc:'S.NO / STOCK ITEMS / TOTAL summary format, mapped into monthly imports'},
+                {icon:'📋', title:'Sales by Month', desc:'S.NO / STOCK ITEMS / TOTAL summary — auto-detects categories and sub-sections'},
                 {icon:'📄', title:'Custom Format', desc:'We auto-detect and map common column names'},
               ].map(f=>(
                 <div key={f.title} style={{display:'flex',gap:10,marginBottom:10}}>
@@ -267,12 +226,21 @@ export default function ImportPage() {
                 </div>
               ))}
             </Card>
+
+            {/* ── Re-import safety notice ── */}
+            <div style={{background:'var(--info-bg,rgba(59,130,246,.08))',border:'1px solid rgba(59,130,246,.2)',borderRadius:10,padding:'10px 14px',fontSize:11,color:'var(--text-secondary)'}}>
+              <span style={{fontWeight:700,color:'var(--info,#3b82f6)'}}>🔄 Safe re-import</span>
+              <span style={{marginLeft:6}}>
+                Re-importing a monthly file <b>replaces</b> existing data for that month — it won't create duplicates.
+              </span>
+            </div>
+
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
               <button onClick={() => downloadTemplate('sales')} style={{background:'var(--bg-hover)',border:'1px solid var(--border)',borderRadius:10,padding:'10px',fontSize:12,color:'var(--text-secondary)',cursor:'pointer',fontFamily:'inherit',textAlign:'center'}}>
-                ⬇ Download Sales Transaction Template
+                ⬇ Sales Transaction Template
               </button>
               <button onClick={() => downloadTemplate('sales_by_month')} style={{background:'var(--bg-hover)',border:'1px solid var(--border)',borderRadius:10,padding:'10px',fontSize:12,color:'var(--text-secondary)',cursor:'pointer',fontFamily:'inherit',textAlign:'center'}}>
-                ⬇ Download Sales by Month Template
+                ⬇ Sales by Month Template
               </button>
             </div>
           </div>
@@ -284,17 +252,16 @@ export default function ImportPage() {
         <div style={{maxWidth:600}}>
           <div style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:14,padding:'12px 16px',marginBottom:20,display:'flex',alignItems:'center',gap:10}}>
             <FileSpreadsheet size={18} style={{color:'var(--success)'}}/>
-            <div>
-              <p style={{fontSize:13,fontWeight:600,color:'var(--text-primary)'}}>{fileName}</p>
-            </div>
+            <p style={{fontSize:13,fontWeight:600,color:'var(--text-primary)'}}>{fileName}</p>
           </div>
           <h3 style={{fontSize:14,fontWeight:700,color:'var(--text-primary)',marginBottom:14}}>What type of data is this file?</h3>
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14,marginBottom:20}}>
             {[
               {id:'sales',icon:'🛒',title:'Sales Transaction Data',desc:'Records with customer, product, amount, date — adds to your sales history'},
-              {id:'sales_by_month',icon:'📊',title:'Sales by Month',desc:'Monthly format: S.NO / STOCK ITEMS / TOTAL — parsed as sales records'},
+              {id:'sales_by_month',icon:'📊',title:'Sales by Month',desc:'Monthly format: S.NO / STOCK ITEMS / TOTAL — safely replaces existing data for the same month'},
             ].map(t=>(
-              <button key={t.id} onClick={()=>setImportType(t.id)} style={{padding:18,background:importType===t.id?'var(--accent-bg)':'var(--bg-card)',border:`1px solid ${importType===t.id?'var(--accent-border)':'var(--border)'}`,borderRadius:14,cursor:'pointer',textAlign:'left',fontFamily:'inherit',transition:'all .15s'}}>
+              <button key={t.id} onClick={()=>setImportType(t.id)}
+                style={{padding:18,background:importType===t.id?'var(--accent-bg)':'var(--bg-card)',border:`1px solid ${importType===t.id?'var(--accent-border)':'var(--border)'}`,borderRadius:14,cursor:'pointer',textAlign:'left',fontFamily:'inherit',transition:'all .15s'}}>
                 <div style={{fontSize:24,marginBottom:8}}>{t.icon}</div>
                 <p style={{fontSize:13,fontWeight:700,color:importType===t.id?'var(--accent)':'var(--text-primary)',marginBottom:4}}>{t.title}</p>
                 <p style={{fontSize:11,color:'var(--text-muted)'}}>{t.desc}</p>
@@ -315,15 +282,16 @@ export default function ImportPage() {
             <div style={{background:'var(--warning-bg)',border:'1px solid rgba(245,158,11,.2)',borderRadius:12,padding:'12px 16px'}}>
               <div style={{display:'flex',gap:8,alignItems:'center',marginBottom:6}}>
                 <AlertCircle size={14} style={{color:'var(--warning)'}}/>
-                <span style={{fontSize:12,fontWeight:700,color:'var(--warning)'}}>Warnings</span>
+                <span style={{fontSize:12,fontWeight:700,color:'var(--warning)'}}>Warnings ({parseResult.warnings.length})</span>
               </div>
-              {parseResult.warnings.map((w,i)=><p key={i} style={{fontSize:11,color:'var(--text-secondary)'}}>{w}</p>)}
+              {parseResult.warnings.slice(0,8).map((w,i)=><p key={i} style={{fontSize:11,color:'var(--text-secondary)'}}>{w}</p>)}
+              {parseResult.warnings.length > 8 && <p style={{fontSize:11,color:'var(--text-muted)'}}>…and {parseResult.warnings.length - 8} more (RANGE lines and sub-total rows — these are expected and safe to ignore)</p>}
             </div>
           )}
 
           <Card>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
-              <h3 style={{fontSize:13,fontWeight:700,color:'var(--text-primary)'}}>Data Preview (first 5 rows)</h3>
+              <h3 style={{fontSize:13,fontWeight:700,color:'var(--text-primary)'}}>Data Preview (first 10 rows)</h3>
               <Badge variant="success">{parseResult.totalRows} rows ready</Badge>
             </div>
             <div style={{overflowX:'auto'}}>
@@ -335,7 +303,9 @@ export default function ImportPage() {
                 </thead>
                 <tbody>
                   {parseResult.preview?.map((row,i)=>(
-                    <tr key={i} style={{borderBottom:'1px solid var(--border)'}} onMouseEnter={e=>e.currentTarget.style.background='var(--bg-hover)'} onMouseLeave={e=>e.currentTarget.style.background=''}>
+                    <tr key={i} style={{borderBottom:'1px solid var(--border)'}}
+                      onMouseEnter={e=>e.currentTarget.style.background='var(--bg-hover)'}
+                      onMouseLeave={e=>e.currentTarget.style.background=''}>
                       {Object.values(row).slice(0,8).map((v,j)=><td key={j} style={{padding:'7px 10px',color:'var(--text-primary)',whiteSpace:'nowrap',maxWidth:160,overflow:'hidden',textOverflow:'ellipsis'}}>{String(v||'')}</td>)}
                     </tr>
                   ))}
@@ -348,13 +318,16 @@ export default function ImportPage() {
             <div style={{background:'var(--accent-bg)',border:'1px solid var(--accent-border)',borderRadius:12,padding:'10px 14px',fontSize:12}}>
               <span style={{color:'var(--text-muted)'}}>Detected month: </span>
               <span style={{color:'var(--accent)',fontWeight:700}}>{parseResult.monthYear}</span>
-              <span style={{color:'var(--text-muted)'}}> — {parseResult.totalRows} sales records will be added</span>
+              <span style={{color:'var(--text-muted)'}}> — {parseResult.totalRows} sales records will be imported</span>
+              <span style={{color:'var(--warning)',marginLeft:8,fontWeight:600}}>
+                ⚠ Existing records for this month will be replaced
+              </span>
             </div>
           )}
 
           <div style={{display:'flex',gap:10,alignItems:'center'}}>
             <Button icon={importing?null:ArrowRight} onClick={handleImport} disabled={importing}>
-              {importing?'Importing...': `Import ${parseResult.totalRows} Records`}
+              {importing ? 'Importing…' : `Import ${parseResult.totalRows} Records`}
             </Button>
             <Button variant="ghost" onClick={()=>setStep(1)}>← Back</Button>
           </div>
@@ -372,12 +345,8 @@ export default function ImportPage() {
             <p style={{color:'var(--text-secondary)',marginBottom:6}}>
               <span style={{fontSize:24,fontFamily:'monospace',fontWeight:700,color:'var(--accent)'}}>{(importResult.inserted||importResult.upserted||0).toLocaleString()}</span>
             </p>
-            <p style={{fontSize:13,color:'var(--text-muted)',marginBottom:24}}>
-              sales records added to database
-            </p>
-            <div style={{display:'flex',gap:10,justifyContent:'center'}}>
-              <Button icon={Upload} onClick={reset}>Import Another File</Button>
-            </div>
+            <p style={{fontSize:13,color:'var(--text-muted)',marginBottom:24}}>sales records added to database</p>
+            <Button icon={Upload} onClick={reset}>Import Another File</Button>
           </Card>
         </div>
       )}
