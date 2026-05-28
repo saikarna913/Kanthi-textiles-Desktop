@@ -3,7 +3,6 @@ const XLSX = require('xlsx');
 function normalizeExcelDate(value) {
   if (!value) return null;
 
-  // Excel serial date
   if (typeof value === 'number') {
     const utc_days = Math.floor(value - 25569);
     const utc_value = utc_days * 86400;
@@ -14,7 +13,6 @@ function normalizeExcelDate(value) {
     return `${year}-${month}-${day}`;
   }
 
-  // String dates
   if (typeof value === 'string') {
     const trimmed = value.trim();
     if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
@@ -48,8 +46,58 @@ function num(v) {
   return parseFloat(String(v).replace(/,/g, '')) || 0;
 }
 
-// ── Canonical category names — match these exactly with what the UI filters use ──
-// The section header text in the Excel file is mapped to a canonical name.
+// ── Month lookups ─────────────────────────────────────────────────────────────
+const MONTH_MAP = {
+  JANUARY: '01', FEBRUARY: '02', MARCH: '03', APRIL: '04',
+  MAY: '05', JUNE: '06', JULY: '07', AUGUST: '08',
+  SEPTEMBER: '09', OCTOBER: '10', NOVEMBER: '11', DECEMBER: '12',
+};
+
+const MONTH_ABBR_MAP = {
+  JAN: '01', FEB: '02', MAR: '03', APR: '04',
+  MAY: '05', JUN: '06', JUL: '07', AUG: '08',
+  SEP: '09', OCT: '10', NOV: '11', DEC: '12',
+};
+
+/**
+ * Extract "YYYY-MM-01" from any text — works on cell content AND sheet tab names.
+ * Handles: "MARCH-25", "MARCH 2025", "Mar25", "Oct24", "Nov-24", "03/2025"
+ */
+function extractMonthDate(text) {
+  if (!text) return null;
+  const t = String(text).trim().toUpperCase();
+
+  // Full month name
+  const fullMatch = t.match(
+    /\b(JANUARY|FEBRUARY|MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER)[\s\-]*(20)?(\d{2})\b/
+  );
+  if (fullMatch) {
+    const month = MONTH_MAP[fullMatch[1]];
+    const year = fullMatch[3].length === 2 ? `20${fullMatch[3]}` : fullMatch[3];
+    return `${year}-${month}-01`;
+  }
+
+  // Abbreviated month: Mar25, Oct24, Nov-24, JAN-2025
+  const abbrMatch = t.match(
+    /\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[\s\-]*(20)?(\d{2})\b/
+  );
+  if (abbrMatch) {
+    const month = MONTH_ABBR_MAP[abbrMatch[1]];
+    const year = abbrMatch[3].length === 2 ? `20${abbrMatch[3]}` : abbrMatch[3];
+    return `${year}-${month}-01`;
+  }
+
+  // Numeric: 03/2025 or 3-2025
+  const numMatch = t.match(/\b(0?[1-9]|1[0-2])[\/\-](20\d{2})\b/);
+  if (numMatch) {
+    const month = String(numMatch[1]).padStart(2, '0');
+    return `${numMatch[2]}-${month}-01`;
+  }
+
+  return null;
+}
+
+// ── Canonical category names ──────────────────────────────────────────────────
 const CATEGORY_MAP = {
   'KALAMKARI SAREES': 'KALAMKARI SAREES',
   'KALAMKARI UNSTITCHED': 'KALAMKARI UNSTITCHED',
@@ -72,51 +120,105 @@ const CATEGORY_MAP = {
 };
 
 /**
- * Determine if a row is a category section header.
- * Section headers in the Kanthi monthly sheet:
- *   - Column B contains the category name in all-caps (or near)
- *   - Column A is empty (or has the header text itself spread across merged cells)
- *   - Column C (TOTAL) is empty or zero
- *
- * We detect them by checking if the trimmed text matches known category names
- * OR if col A is blank and col C is blank/zero and col B is non-numeric.
+ * Detect if a row is a category section header.
+ * Returns canonical category name or null.
  */
 function detectCategory(rowCells) {
-  // rowCells: [colA, colB, colC, ...]
   const a = clean(rowCells[0]).toUpperCase();
   const b = clean(rowCells[1]).toUpperCase();
-  const c = clean(rowCells[2]);
 
-  const cNum = num(rowCells[2]);
-
-  // Direct match against known categories (col B)
   for (const key of Object.keys(CATEGORY_MAP)) {
     if (b === key.toUpperCase()) return CATEGORY_MAP[key];
-  }
-
-  // Also check if the joined row text matches (handles merged cells where text lands in col A)
-  for (const key of Object.keys(CATEGORY_MAP)) {
     if (a === key.toUpperCase()) return CATEGORY_MAP[key];
   }
 
-  // Heuristic: col A is empty, col C is empty or zero, col B is not a number
-  // and col B is not an S.NO style number
+  const cNum = num(rowCells[2]);
   if (!a && b && cNum === 0 && isNaN(Number(rowCells[1]))) {
-    // Check it doesn't look like a sub-range line e.g. "RANGE (500-600)"
     if (!b.includes('RANGE') && !b.includes('TOTAL') && b.length > 3) {
-      // Try partial match
       for (const key of Object.keys(CATEGORY_MAP)) {
         if (b.includes(key.toUpperCase()) || key.toUpperCase().includes(b)) {
           return CATEGORY_MAP[key];
         }
       }
-      // Return the raw text capitalised as a fallback category
       return clean(rowCells[1]).toUpperCase();
     }
   }
 
   return null;
 }
+
+/**
+ * Parse ONE worksheet (rows = array-of-arrays).
+ * sheetName is used as a fallback month source (e.g. "Mar25").
+ */
+function parseMonthlySheet(rows, sheetName) {
+  let monthDate = null;
+  let currentCategory = '';
+  const records = [];
+  const warnings = [];
+
+  // Try the sheet tab name first — most reliable source for month
+  monthDate = extractMonthDate(sheetName);
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    if (!row || !row.length) continue;
+
+    // ── Try to detect month from cell content (title rows) ────────────────
+    if (!monthDate) {
+      const joined = row.map(c => clean(c)).join(' ');
+      const found = extractMonthDate(joined);
+      if (found) {
+        monthDate = found;
+        continue; // this is a title row, skip to next
+      }
+    } else {
+      // Already have month — still skip title rows (no TOTAL value)
+      const joined = row.map(c => clean(c)).join(' ').toUpperCase();
+      if (extractMonthDate(joined) && !num(row[2])) {
+        continue;
+      }
+    }
+
+    // ── Skip column-header row ────────────────────────────────────────────
+    const b = clean(row[1]).toUpperCase();
+    if (b === 'STOCK ITEMS' || b === 'ITEMS') continue;
+
+    // ── Skip RANGE and TOTAL sub-rows ─────────────────────────────────────
+    if (b.includes('RANGE') || b.includes('TOTAL')) {
+      warnings.push(`Row ${i + 1}: skipped sub-row "${clean(row[1])}"`);
+      continue;
+    }
+
+    // ── Detect category section header ────────────────────────────────────
+    const detectedCat = detectCategory(row);
+    if (detectedCat) {
+      currentCategory = detectedCat;
+      continue;
+    }
+
+    // ── Product data row ──────────────────────────────────────────────────
+    const productName = clean(row[1]);
+    if (!productName) continue;
+
+    const quantity = num(row[2]);
+
+    records.push({
+      date: monthDate,
+      product_name: productName,
+      category: currentCategory,
+      quantity,
+      total_amount: 0,
+      unit_price: 0,
+      profit: 0,
+      sales_type: 'sales_by_month',
+    });
+  }
+
+  return { records, monthDate, warnings };
+}
+
+// ── Public API ────────────────────────────────────────────────────────────────
 
 function parseFile(filePath) {
   try {
@@ -125,13 +227,9 @@ function parseFile(filePath) {
     const raw = XLSX.utils.sheet_to_json(sheet, { defval: '' });
 
     const records = [];
-
     for (const row of raw) {
       const quantity = num(row.quantity || row.Quantity || row.QTY);
-      const totalAmount = num(
-        row.total_amount || row.amount || row.Amount || row.Total
-      );
-
+      const totalAmount = num(row.total_amount || row.amount || row.Amount || row.Total);
       records.push({
         invoice_no: clean(row.invoice_no || row.Invoice || row['Invoice No']),
         date: normalizeExcelDate(row.date || row.Date),
@@ -159,127 +257,93 @@ function parseFile(filePath) {
 }
 
 /**
- * parseSalesByMonth — parses the Kanthi monthly stock sheet format:
+ * parseSalesByMonth — reads ALL sheets in the workbook.
  *
- *   Row 1:  "MARCH-25" (month/year title — may be in col A or B)
- *   Row 2:  S.NO  |  STOCK ITEMS  |  TOTAL
- *   Row 3:  (empty A) | KALAMKARI SAREES | (empty C)  ← category header
- *   Row 4:  1  |  MALMAL SAREE (S.P)  |  573          ← product row
- *   ...
+ * Each sheet tab is one month (e.g. "Oct24", "Nov24", "Dec24", "Mar25").
+ * There can be any number of sheets — all are processed.
  *
- * Key rules:
- *   - Category headers: col A empty, col C empty/zero, col B is category name
- *   - Product rows: col A is a number (S.NO), col B is product name, col C is quantity
- *   - Sub-range rows: col B contains "RANGE" — skip
- *   - Summary/total rows: col B contains "TOTAL" — skip
- *   - Zero-quantity rows are included (products that sold 0 units are valid data)
+ * Returns:
+ *   records      — combined array of all product rows from all sheets
+ *   importDates  — unique "YYYY-MM-01" strings (one per sheet/month),
+ *                  used by ImportPage to delete-before-insert per month
+ *   sheetSummary — per-sheet stats for debugging
  */
 function parseSalesByMonth(filePath) {
   try {
     const workbook = XLSX.readFile(filePath, { cellDates: false });
-    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const sheetNames = workbook.SheetNames;
 
-    const rows = XLSX.utils.sheet_to_json(sheet, {
-      header: 1,
-      defval: '',
-      raw: true,
-    });
+    if (!sheetNames || sheetNames.length === 0) {
+      return { success: false, error: 'Workbook has no sheets' };
+    }
 
-    let detectedMonthDate = null; // "YYYY-MM-01"
-    let currentCategory = '';    // current section category name
-    const records = [];
-    const warnings = [];
+    const allRecords = [];
+    const allWarnings = [];
+    const importDatesSet = new Set();
+    const sheetSummary = [];
 
-    // ── Month name → 2-digit month number ────────────────────────────────
-    const MONTH_MAP = {
-      JANUARY: '01', FEBRUARY: '02', MARCH: '03', APRIL: '04',
-      MAY: '05', JUNE: '06', JULY: '07', AUGUST: '08',
-      SEPTEMBER: '09', OCTOBER: '10', NOVEMBER: '11', DECEMBER: '12',
-    };
+    for (const sheetName of sheetNames) {
+      const sheet = workbook.Sheets[sheetName];
+      if (!sheet) continue;
 
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
-      if (!row || !row.length) continue;
+      const rows = XLSX.utils.sheet_to_json(sheet, {
+        header: 1,
+        defval: '',
+        raw: true,
+      });
 
-      // ── 1. Detect month from any cell in the row ──────────────────────
-      const joined = row.map(c => clean(c)).join(' ').toUpperCase();
+      const { records, monthDate, warnings } = parseMonthlySheet(rows, sheetName);
 
-      // Pattern: "MARCH-25", "MARCH 2025", "MARCH-2025", etc.
-      const monthMatch = joined.match(
-        /\b(JANUARY|FEBRUARY|MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER)[\s\-]*(20)?(\d{2})\b/
-      );
-      if (monthMatch) {
-        const monthName = monthMatch[1];
-        const yearSuffix = monthMatch[3];
-        const year = yearSuffix.length === 2 ? `20${yearSuffix}` : yearSuffix;
-        const month = MONTH_MAP[monthName];
-        detectedMonthDate = `${year}-${month}-01`;
-        continue; // title row, not a data row
+      if (monthDate) {
+        importDatesSet.add(monthDate);
+      } else {
+        allWarnings.push(
+          `[${sheetName}] Month not detected — ${records.length} records will have no date. ` +
+          `Add a header like "MARCH-25" or name the tab "Mar25".`
+        );
       }
 
-      // ── 2. Skip the header row (S.NO / STOCK ITEMS / TOTAL) ──────────
-      const b = clean(row[1]).toUpperCase();
-      if (b === 'STOCK ITEMS' || b === 'ITEMS') continue;
-
-      // ── 3. Skip sub-range / sub-total rows ───────────────────────────
-      if (b.includes('RANGE') || b.includes('TOTAL')) {
-        warnings.push(`Row ${i + 1}: skipped — "${clean(row[1])}"`);
-        continue;
+      if (warnings.length) {
+        allWarnings.push(...warnings.map(w => `[${sheetName}] ${w}`));
       }
 
-      // ── 4. Detect category section header ────────────────────────────
-      const detectedCat = detectCategory(row);
-      if (detectedCat) {
-        currentCategory = detectedCat;
-        continue; // header row, not a product row
-      }
+      allRecords.push(...records);
 
-      // ── 5. Product rows: col B must be a non-empty product name ──────
-      const productName = clean(row[1]);
-      if (!productName) continue;
-
-      // col C is the TOTAL (units sold). Accept 0 as a valid value.
-      const rawQty = row[2];
-      const quantity = num(rawQty);
-
-      // col A is S.NO (a number) — validate this looks like a product row
-      const sno = clean(row[0]);
-      const snoIsNumber = sno !== '' && !isNaN(Number(sno));
-
-      // If col A is empty and col C is empty, this might be a stray row — skip
-      if (!snoIsNumber && quantity === 0 && !productName) continue;
-
-      records.push({
-        date: detectedMonthDate,
-        product_name: productName,
-        category: currentCategory,
-        quantity,        // units sold (stored as quantity in the importer)
-        total_amount: 0, // not available in this format
-        unit_price: 0,
-        profit: 0,
-        sales_type: 'sales_by_month',
+      sheetSummary.push({
+        sheetName,
+        monthDate: monthDate || null,
+        recordCount: records.length,
+        detected: !!monthDate,
       });
     }
 
-    if (!detectedMonthDate) {
-      warnings.push('Could not detect month/year from the sheet. Import will use today\'s date.');
+    const importDates = Array.from(importDatesSet).sort();
+
+    // Human-readable month range label
+    let monthYear = null;
+    if (importDates.length === 1) {
+      monthYear = importDates[0];
+    } else if (importDates.length > 1) {
+      monthYear = `${importDates[0]} → ${importDates[importDates.length - 1]} (${importDates.length} months)`;
     }
 
     return {
       success: true,
-      records,
-      totalRows: records.length,
-      preview: records.slice(0, 10),
-      monthYear: detectedMonthDate,
-      importDates: detectedMonthDate ? [detectedMonthDate] : [],
-      warnings: warnings.length ? warnings : undefined,
+      records: allRecords,
+      totalRows: allRecords.length,
+      preview: allRecords.slice(0, 10),
+      importDates,
+      monthYear,
+      sheetsProcessed: sheetNames.length,
+      sheetSummary,
+      warnings: allWarnings.length ? allWarnings : undefined,
     };
   } catch (err) {
     return { success: false, error: err.message };
   }
 }
 
-// Keep parseStockRegister as alias for backwards compatibility
+// Alias for backwards compatibility
 const parseStockRegister = parseSalesByMonth;
 
 function exportToExcel(data, columns, filePath, sheetName = 'Sheet1') {

@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import { Upload, FileSpreadsheet, CheckCircle2, AlertCircle, ArrowRight, X, RefreshCw, Package } from 'lucide-react';
+import { Upload, FileSpreadsheet, CheckCircle2, AlertCircle, ArrowRight, X, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { Card, Badge, Button, PageHeader } from '../../components/ui/index';
 
@@ -31,8 +31,9 @@ export default function ImportPage() {
     }
   }, []);
 
-  const processFile = async (path, fname) => {
-    setFilePath(path); setFileName(fname);
+  const processFile = (path, fname) => {
+    setFilePath(path);
+    setFileName(fname);
     setStep(1);
   };
 
@@ -44,7 +45,7 @@ export default function ImportPage() {
       const name = path.split('\\').pop().split('/').pop();
       processFile(path, name);
       toast.success(`File selected: ${name}`);
-    } catch(e) {
+    } catch (e) {
       toast.error(`Failed to open file dialog: ${e.message}`);
     }
   };
@@ -67,7 +68,7 @@ export default function ImportPage() {
   }, []);
 
   const handleParse = async () => {
-    toast.loading('Parsing file...', { id:'parse' });
+    toast.loading('Parsing file...', { id: 'parse' });
     try {
       let result;
       if (importType === 'sales_by_month') {
@@ -77,21 +78,17 @@ export default function ImportPage() {
       }
       toast.dismiss('parse');
       if (!result.success) { toast.error(result.error || 'Failed to parse file'); return; }
+
+      // Stamp sales_type on every record so the DB layer routes them correctly
       if (Array.isArray(result.records)) {
-        result.records = result.records.map(r => ({
-  ...r,
-  sales_type: importType,
-  total_amount:
-    importType === 'sales_by_month'
-      ? 0
-      : r.total_amount
-}));
+        result.records = result.records.map(r => ({ ...r, sales_type: importType }));
         result.preview = result.preview?.map(r => ({ ...r, sales_type: importType }));
       }
+
       setParseResult(result);
       setStep(2);
       toast.success(`Parsed ${result.totalRows} rows`);
-    } catch(e) {
+    } catch (e) {
       toast.dismiss('parse');
       toast.error('Parse error: ' + e.message);
     }
@@ -100,65 +97,92 @@ export default function ImportPage() {
   const handleImport = async () => {
     if (!parseResult?.records?.length) { toast.error('No records to import'); return; }
     setImporting(true);
+
     try {
-      // ── MONTHLY IMPORT: delete existing records for the same month(s) first ──
-      // This prevents the duplicate-accumulation bug where re-importing the same
-      // file keeps adding rows. We wipe records for the detected date(s) before
-      // inserting fresh ones.
+      // ── MONTHLY IMPORT: delete existing records for this month first ──────
+      // This is the safe re-import: we wipe rows for the same month_key before
+      // inserting fresh ones, preventing duplicate accumulation.
       if (importType === 'sales_by_month' && parseResult.importDates?.length) {
         toast.loading('Clearing existing records for this month…', { id: 'clr' });
+
         for (const dateStr of parseResult.importDates) {
-          // dateStr is "YYYY-MM-01"; compute end of month
-          const [y, m] = dateStr.split('-').map(Number);
+          // dateStr is "YYYY-MM-01" — compute the full month range
+          const parts = dateStr.split('-');
+          const y = parseInt(parts[0]);
+          const m = parseInt(parts[1]);
+          // Last day of month: day 0 of next month
           const endDay = new Date(y, m, 0).getDate();
-          const dateFrom = dateStr; // already "YYYY-MM-01"
-          const dateTo = `${y}-${String(m).padStart(2,'0')}-${endDay}`;
+          const dateFrom = `${y}-${String(m).padStart(2, '0')}-01`;
+          const dateTo = `${y}-${String(m).padStart(2, '0')}-${String(endDay).padStart(2, '0')}`;
+
+          // FIX: actually call deleteSalesByFilter (was computed but never called before)
+          const delResult = await window.electron.db.deleteSalesByFilter({
+            salesType: 'sales_by_month',
+            dateFrom,
+            dateTo,
+          });
+
+          if (delResult?.deleted > 0) {
+            console.log(`Cleared ${delResult.deleted} existing rows for ${dateFrom} → ${dateTo}`);
+          }
         }
+
         toast.dismiss('clr');
       }
 
       const result = await window.electron.db.insertSales(parseResult.records);
+
       if (!result?.success && result?.error) {
         toast.error(`Import failed: ${result.error}`);
         setImporting(false);
         return;
       }
+
       setImportResult(result);
       setStep(3);
-      const imported = result?.inserted || result?.upserted || parseResult.records.length;
+      const imported = result?.inserted || parseResult.records.length;
       toast.success(`${imported} records imported successfully!`);
-    } catch(e) {
+    } catch (e) {
       toast.error(`Import failed: ${e.message}`);
     }
+
     setImporting(false);
   };
 
-  const reset = () => { setStep(0); setFilePath(''); setFileName(''); setImportType(''); setParseResult(null); setImportResult(null); };
+  const reset = () => {
+    setStep(0); setFilePath(''); setFileName(''); setImportType('');
+    setParseResult(null); setImportResult(null);
+  };
 
   const downloadTemplate = async (type) => {
     const isMonthly = type === 'sales_by_month';
     const templateData = isMonthly ? [
-      { 'S.NO': 1, 'STOCK ITEMS': 'Sample Item', 'TOTAL': 1200 }
+      { 'S.NO': 1, 'STOCK ITEMS': 'Sample Item', 'TOTAL': 1200 },
     ] : [
-      { date:'2024-10-01', customer_name:'Sample Customer', product_name:'MALMAL KALAMKARI SAREE', category:'KALAMKARI SAREES', quantity:2, unit_price:500, total_amount:1000, profit:300, payment_mode:'Cash' }
+      {
+        date: '2024-10-01', customer_name: 'Sample Customer',
+        product_name: 'MALMAL KALAMKARI SAREE', category: 'KALAMKARI SAREES',
+        quantity: 2, unit_price: 500, total_amount: 1000, profit: 300, payment_mode: 'Cash',
+      },
     ];
     const columns = isMonthly ? [
-      { key:'S.NO', header:'S.NO', width:8 },
-      { key:'STOCK ITEMS', header:'STOCK ITEMS', width:26 },
-      { key:'TOTAL', header:'TOTAL', width:14 },
+      { key: 'S.NO', header: 'S.NO', width: 8 },
+      { key: 'STOCK ITEMS', header: 'STOCK ITEMS', width: 26 },
+      { key: 'TOTAL', header: 'TOTAL', width: 14 },
     ] : [
-      { key:'date', header:'Date', width:14 },
-      { key:'customer_name', header:'Customer Name', width:22 },
-      { key:'product_name', header:'Product Name', width:28 },
-      { key:'category', header:'Category', width:20 },
-      { key:'quantity', header:'Quantity', width:10 },
-      { key:'unit_price', header:'Unit Price', width:12 },
-      { key:'total_amount', header:'Total Amount', width:14 },
-      { key:'profit', header:'Profit', width:12 },
-      { key:'payment_mode', header:'Payment Mode', width:14 },
+      { key: 'date', header: 'Date', width: 14 },
+      { key: 'customer_name', header: 'Customer Name', width: 22 },
+      { key: 'product_name', header: 'Product Name', width: 28 },
+      { key: 'category', header: 'Category', width: 20 },
+      { key: 'quantity', header: 'Quantity', width: 10 },
+      { key: 'unit_price', header: 'Unit Price', width: 12 },
+      { key: 'total_amount', header: 'Total Amount', width: 14 },
+      { key: 'profit', header: 'Profit', width: 12 },
+      { key: 'payment_mode', header: 'Payment Mode', width: 14 },
     ];
     await window.electron.excel.exportData({
-      data: templateData, columns,
+      data: templateData,
+      columns,
       filename: `kanthi_import_template_${type}.xlsx`,
       sheetName: type,
     });
@@ -172,74 +196,141 @@ export default function ImportPage() {
   };
 
   return (
-    <div style={{height:'100%',overflowY:'auto',padding:24}} className="scroll-area">
-      <PageHeader title="Import Data" subtitle="Upload Excel or CSV files — handles invoice-level and monthly summary imports" icon={Upload} iconColor="var(--success)"
-        actions={step>0 && <Button variant="ghost" size="sm" icon={RefreshCw} onClick={reset}>Start Over</Button>}/>
+    <div style={{ height: '100%', overflowY: 'auto', padding: 24 }} className="scroll-area">
+      <PageHeader
+        title="Import Data"
+        subtitle="Upload Excel or CSV files — handles invoice-level and monthly summary imports"
+        icon={Upload}
+        iconColor="var(--success)"
+        actions={step > 0 && <Button variant="ghost" size="sm" icon={RefreshCw} onClick={reset}>Start Over</Button>}
+      />
 
       {/* Step indicator */}
-      <div style={{display:'flex',alignItems:'center',gap:0,marginBottom:28,maxWidth:560}}>
-        {STEPS.map((s,i)=>(
+      <div style={{ display: 'flex', alignItems: 'center', gap: 0, marginBottom: 28, maxWidth: 560 }}>
+        {STEPS.map((s, i) => (
           <React.Fragment key={s}>
-            <div style={{display:'flex',alignItems:'center',gap:8}}>
-              <div style={{width:26,height:26,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:700,transition:'all .2s',
-                background:i<step?'var(--accent)':i===step?'var(--accent-bg)':'var(--bg-hover)',
-                border:i===step?'1px solid var(--accent-border)':'1px solid var(--border)',
-                color:i<step?'white':i===step?'var(--accent)':'var(--text-muted)'}}>
-                {i<step?'✓':i+1}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{
+                width: 26, height: 26, borderRadius: '50%', display: 'flex',
+                alignItems: 'center', justifyContent: 'center', fontSize: 11,
+                fontWeight: 700, transition: 'all .2s',
+                background: i < step ? 'var(--accent)' : i === step ? 'var(--accent-bg)' : 'var(--bg-hover)',
+                border: i === step ? '1px solid var(--accent-border)' : '1px solid var(--border)',
+                color: i < step ? 'white' : i === step ? 'var(--accent)' : 'var(--text-muted)',
+              }}>
+                {i < step ? '✓' : i + 1}
               </div>
-              <span style={{fontSize:12,fontWeight:600,color:i===step?'var(--text-primary)':'var(--text-muted)'}}>{s}</span>
+              <span style={{
+                fontSize: 12, fontWeight: 600,
+                color: i === step ? 'var(--text-primary)' : 'var(--text-muted)',
+              }}>{s}</span>
             </div>
-            {i<STEPS.length-1 && <div style={{flex:1,height:1,background:i<step?'var(--accent)':'var(--border)',margin:'0 12px'}}/>}
+            {i < STEPS.length - 1 && (
+              <div style={{
+                flex: 1, height: 1,
+                background: i < step ? 'var(--accent)' : 'var(--border)',
+                margin: '0 12px',
+              }} />
+            )}
           </React.Fragment>
         ))}
       </div>
 
-      {/* Step 0: Upload */}
-      {step===0 && (
-        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:20,maxWidth:820}}>
+      {/* ── Step 0: Upload ─────────────────────────────────────────────────── */}
+      {step === 0 && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, maxWidth: 820 }}>
           <div>
-            <div onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop} style={dropSt}>
-              <div style={{width:56,height:56,background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:14,display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 14px'}}>
-                <FileSpreadsheet size={26} style={{color:'var(--success)'}}/>
+            <div
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+              style={dropSt}
+            >
+              <div style={{
+                width: 56, height: 56, background: 'var(--bg-card)',
+                border: '1px solid var(--border)', borderRadius: 14,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                margin: '0 auto 14px',
+              }}>
+                <FileSpreadsheet size={26} style={{ color: 'var(--success)' }} />
               </div>
-              <p style={{fontSize:14,fontWeight:700,color:'var(--text-primary)',marginBottom:4}}>
+              <p style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 4 }}>
                 {dragActive ? 'Drop file here...' : 'Drag & drop Excel or CSV file'}
               </p>
-              <p style={{fontSize:12,color:'var(--text-muted)',marginBottom:16}}>Supports .xlsx, .xls, .csv</p>
+              <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 16 }}>
+                Supports .xlsx, .xls, .csv
+              </p>
             </div>
-            <button type="button" onClick={handleFileSelect} disabled={!electronReady}
-              style={{marginTop:16,background:electronReady?'var(--accent)':'var(--text-muted)',color:'white',border:'none',borderRadius:10,padding:'8px 20px',fontSize:13,fontWeight:600,cursor:electronReady?'pointer':'not-allowed',fontFamily:'inherit',opacity:electronReady?1:0.6}}>
+            <button
+              type="button"
+              onClick={handleFileSelect}
+              disabled={!electronReady}
+              style={{
+                marginTop: 16,
+                background: electronReady ? 'var(--accent)' : 'var(--text-muted)',
+                color: 'white', border: 'none', borderRadius: 10,
+                padding: '8px 20px', fontSize: 13, fontWeight: 600,
+                cursor: electronReady ? 'pointer' : 'not-allowed',
+                fontFamily: 'inherit', opacity: electronReady ? 1 : 0.6,
+              }}
+            >
               {electronReady ? 'Browse File' : 'Electron not ready'}
             </button>
           </div>
-          <div style={{display:'flex',flexDirection:'column',gap:14}}>
-            <Card style={{padding:16}}>
-              <h3 style={{fontSize:12,fontWeight:700,color:'var(--text-primary)',marginBottom:10}}>Supported Formats</h3>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <Card style={{ padding: 16 }}>
+              <h3 style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 10 }}>
+                Supported Formats
+              </h3>
               {[
-                {icon:'📊', title:'Standard Sales Excel', desc:'invoice, date, customer, product, amount columns'},
-                {icon:'📋', title:'Sales by Month', desc:'S.NO / STOCK ITEMS / TOTAL summary — auto-detects categories and sub-sections'},
-                {icon:'📄', title:'Custom Format', desc:'We auto-detect and map common column names'},
-              ].map(f=>(
-                <div key={f.title} style={{display:'flex',gap:10,marginBottom:10}}>
-                  <span style={{fontSize:16}}>{f.icon}</span>
-                  <div><p style={{fontSize:12,fontWeight:600,color:'var(--text-primary)'}}>{f.title}</p><p style={{fontSize:11,color:'var(--text-muted)'}}>{f.desc}</p></div>
+                { icon: '📊', title: 'Standard Sales Excel', desc: 'invoice, date, customer, product, amount columns' },
+                { icon: '📋', title: 'Sales by Month', desc: 'S.NO / STOCK ITEMS / TOTAL — detects month, category sections, and all products automatically' },
+                { icon: '📄', title: 'Custom Format', desc: 'We auto-detect and map common column names' },
+              ].map(f => (
+                <div key={f.title} style={{ display: 'flex', gap: 10, marginBottom: 10 }}>
+                  <span style={{ fontSize: 16 }}>{f.icon}</span>
+                  <div>
+                    <p style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>{f.title}</p>
+                    <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>{f.desc}</p>
+                  </div>
                 </div>
               ))}
             </Card>
 
-            {/* ── Re-import safety notice ── */}
-            <div style={{background:'var(--info-bg,rgba(59,130,246,.08))',border:'1px solid rgba(59,130,246,.2)',borderRadius:10,padding:'10px 14px',fontSize:11,color:'var(--text-secondary)'}}>
-              <span style={{fontWeight:700,color:'var(--info,#3b82f6)'}}>🔄 Safe re-import</span>
-              <span style={{marginLeft:6}}>
-                Re-importing a monthly file <b>replaces</b> existing data for that month — it won't create duplicates.
+            <div style={{
+              background: 'var(--info-bg, rgba(59,130,246,.08))',
+              border: '1px solid rgba(59,130,246,.2)',
+              borderRadius: 10, padding: '10px 14px', fontSize: 11,
+              color: 'var(--text-secondary)',
+            }}>
+              <span style={{ fontWeight: 700, color: 'var(--info, #3b82f6)' }}>🔄 Safe re-import</span>
+              <span style={{ marginLeft: 6 }}>
+                Re-importing a monthly file <b>replaces</b> existing data for that month — no duplicates created.
               </span>
             </div>
 
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>
-              <button onClick={() => downloadTemplate('sales')} style={{background:'var(--bg-hover)',border:'1px solid var(--border)',borderRadius:10,padding:'10px',fontSize:12,color:'var(--text-secondary)',cursor:'pointer',fontFamily:'inherit',textAlign:'center'}}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              <button
+                onClick={() => downloadTemplate('sales')}
+                style={{
+                  background: 'var(--bg-hover)', border: '1px solid var(--border)',
+                  borderRadius: 10, padding: '10px', fontSize: 12,
+                  color: 'var(--text-secondary)', cursor: 'pointer',
+                  fontFamily: 'inherit', textAlign: 'center',
+                }}
+              >
                 ⬇ Sales Transaction Template
               </button>
-              <button onClick={() => downloadTemplate('sales_by_month')} style={{background:'var(--bg-hover)',border:'1px solid var(--border)',borderRadius:10,padding:'10px',fontSize:12,color:'var(--text-secondary)',cursor:'pointer',fontFamily:'inherit',textAlign:'center'}}>
+              <button
+                onClick={() => downloadTemplate('sales_by_month')}
+                style={{
+                  background: 'var(--bg-hover)', border: '1px solid var(--border)',
+                  borderRadius: 10, padding: '10px', fontSize: 12,
+                  color: 'var(--text-secondary)', cursor: 'pointer',
+                  fontFamily: 'inherit', textAlign: 'center',
+                }}
+              >
                 ⬇ Sales by Month Template
               </button>
             </div>
@@ -247,66 +338,163 @@ export default function ImportPage() {
         </div>
       )}
 
-      {/* Step 1: Choose type */}
-      {step===1 && (
-        <div style={{maxWidth:600}}>
-          <div style={{background:'var(--bg-card)',border:'1px solid var(--border)',borderRadius:14,padding:'12px 16px',marginBottom:20,display:'flex',alignItems:'center',gap:10}}>
-            <FileSpreadsheet size={18} style={{color:'var(--success)'}}/>
-            <p style={{fontSize:13,fontWeight:600,color:'var(--text-primary)'}}>{fileName}</p>
+      {/* ── Step 1: Choose import type ─────────────────────────────────────── */}
+      {step === 1 && (
+        <div style={{ maxWidth: 600 }}>
+          <div style={{
+            background: 'var(--bg-card)', border: '1px solid var(--border)',
+            borderRadius: 14, padding: '12px 16px', marginBottom: 20,
+            display: 'flex', alignItems: 'center', gap: 10,
+          }}>
+            <FileSpreadsheet size={18} style={{ color: 'var(--success)' }} />
+            <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{fileName}</p>
           </div>
-          <h3 style={{fontSize:14,fontWeight:700,color:'var(--text-primary)',marginBottom:14}}>What type of data is this file?</h3>
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14,marginBottom:20}}>
+          <h3 style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 14 }}>
+            What type of data is in this file?
+          </h3>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 20 }}>
             {[
-              {id:'sales',icon:'🛒',title:'Sales Transaction Data',desc:'Records with customer, product, amount, date — adds to your sales history'},
-              {id:'sales_by_month',icon:'📊',title:'Sales by Month',desc:'Monthly format: S.NO / STOCK ITEMS / TOTAL — safely replaces existing data for the same month'},
-            ].map(t=>(
-              <button key={t.id} onClick={()=>setImportType(t.id)}
-                style={{padding:18,background:importType===t.id?'var(--accent-bg)':'var(--bg-card)',border:`1px solid ${importType===t.id?'var(--accent-border)':'var(--border)'}`,borderRadius:14,cursor:'pointer',textAlign:'left',fontFamily:'inherit',transition:'all .15s'}}>
-                <div style={{fontSize:24,marginBottom:8}}>{t.icon}</div>
-                <p style={{fontSize:13,fontWeight:700,color:importType===t.id?'var(--accent)':'var(--text-primary)',marginBottom:4}}>{t.title}</p>
-                <p style={{fontSize:11,color:'var(--text-muted)'}}>{t.desc}</p>
+              {
+                id: 'sales', icon: '🛒',
+                title: 'Sales Transaction Data',
+                desc: 'Records with customer, product, amount, date — appends to your sales history',
+              },
+              {
+                id: 'sales_by_month', icon: '📊',
+                title: 'Sales by Month',
+                desc: 'Monthly format: S.NO / STOCK ITEMS / TOTAL — safely replaces existing data for the same month',
+              },
+            ].map(t => (
+              <button
+                key={t.id}
+                onClick={() => setImportType(t.id)}
+                style={{
+                  padding: 18,
+                  background: importType === t.id ? 'var(--accent-bg)' : 'var(--bg-card)',
+                  border: `1px solid ${importType === t.id ? 'var(--accent-border)' : 'var(--border)'}`,
+                  borderRadius: 14, cursor: 'pointer', textAlign: 'left',
+                  fontFamily: 'inherit', transition: 'all .15s',
+                }}
+              >
+                <div style={{ fontSize: 24, marginBottom: 8 }}>{t.icon}</div>
+                <p style={{
+                  fontSize: 13, fontWeight: 700,
+                  color: importType === t.id ? 'var(--accent)' : 'var(--text-primary)',
+                  marginBottom: 4,
+                }}>{t.title}</p>
+                <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>{t.desc}</p>
               </button>
             ))}
           </div>
-          <div style={{display:'flex',gap:10}}>
-            <Button variant="ghost" onClick={()=>setStep(0)}>← Back</Button>
+          <div style={{ display: 'flex', gap: 10 }}>
+            <Button variant="ghost" onClick={() => setStep(0)}>← Back</Button>
             <Button icon={ArrowRight} onClick={handleParse} disabled={!importType}>Parse File</Button>
           </div>
         </div>
       )}
 
-      {/* Step 2: Preview */}
-      {step===2 && parseResult && (
-        <div style={{maxWidth:860,display:'flex',flexDirection:'column',gap:16}}>
+      {/* ── Step 2: Preview & Validate ────────────────────────────────────── */}
+      {step === 2 && parseResult && (
+        <div style={{ maxWidth: 860, display: 'flex', flexDirection: 'column', gap: 16 }}>
+
+          {/* Warnings from parser */}
           {parseResult.warnings?.length > 0 && (
-            <div style={{background:'var(--warning-bg)',border:'1px solid rgba(245,158,11,.2)',borderRadius:12,padding:'12px 16px'}}>
-              <div style={{display:'flex',gap:8,alignItems:'center',marginBottom:6}}>
-                <AlertCircle size={14} style={{color:'var(--warning)'}}/>
-                <span style={{fontSize:12,fontWeight:700,color:'var(--warning)'}}>Warnings ({parseResult.warnings.length})</span>
+            <div style={{
+              background: 'var(--warning-bg)',
+              border: '1px solid rgba(245,158,11,.2)',
+              borderRadius: 12, padding: '12px 16px',
+            }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
+                <AlertCircle size={14} style={{ color: 'var(--warning)' }} />
+                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--warning)' }}>
+                  Warnings ({parseResult.warnings.length})
+                </span>
               </div>
-              {parseResult.warnings.slice(0,8).map((w,i)=><p key={i} style={{fontSize:11,color:'var(--text-secondary)'}}>{w}</p>)}
-              {parseResult.warnings.length > 8 && <p style={{fontSize:11,color:'var(--text-muted)'}}>…and {parseResult.warnings.length - 8} more (RANGE lines and sub-total rows — these are expected and safe to ignore)</p>}
+              {parseResult.warnings.slice(0, 8).map((w, i) => (
+                <p key={i} style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{w}</p>
+              ))}
+              {parseResult.warnings.length > 8 && (
+                <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                  …and {parseResult.warnings.length - 8} more (RANGE lines and sub-total rows — expected and safe to ignore)
+                </p>
+              )}
             </div>
           )}
 
+          {/* Category summary for monthly imports */}
+          {importType === 'sales_by_month' && (() => {
+            const catMap = {};
+            (parseResult.records || []).forEach(r => {
+              const cat = r.category || '(uncategorised)';
+              catMap[cat] = (catMap[cat] || 0) + 1;
+            });
+            const cats = Object.entries(catMap).sort((a, b) => b[1] - a[1]);
+            return cats.length > 0 ? (
+              <Card style={{ padding: 14 }}>
+                <h3 style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 10 }}>
+                  Category Detection ({cats.length} categories found)
+                </h3>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {cats.map(([cat, count]) => (
+                    <div key={cat} style={{
+                      background: cat === '(uncategorised)' ? 'var(--warning-bg)' : 'var(--accent-bg)',
+                      border: `1px solid ${cat === '(uncategorised)' ? 'rgba(245,158,11,.2)' : 'var(--accent-border)'}`,
+                      borderRadius: 8, padding: '4px 10px', fontSize: 11,
+                    }}>
+                      <span style={{ fontWeight: 700, color: cat === '(uncategorised)' ? 'var(--warning)' : 'var(--accent)' }}>
+                        {cat}
+                      </span>
+                      <span style={{ color: 'var(--text-muted)', marginLeft: 6 }}>{count} items</span>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            ) : null;
+          })()}
+
+          {/* Data preview table */}
           <Card>
-            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
-              <h3 style={{fontSize:13,fontWeight:700,color:'var(--text-primary)'}}>Data Preview (first 10 rows)</h3>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <h3 style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>
+                Data Preview (first 10 rows)
+              </h3>
               <Badge variant="success">{parseResult.totalRows} rows ready</Badge>
             </div>
-            <div style={{overflowX:'auto'}}>
-              <table style={{width:'100%',borderCollapse:'collapse',fontSize:11}}>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
                 <thead>
-                  <tr style={{borderBottom:'1px solid var(--border)',background:'var(--bg-hover)'}}>
-                    {parseResult.preview?.[0] && Object.keys(parseResult.preview[0]).slice(0,8).map(h=><th key={h} style={{textAlign:'left',padding:'6px 10px',color:'var(--text-muted)',fontWeight:600,whiteSpace:'nowrap'}}>{h}</th>)}
+                  <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-hover)' }}>
+                    {parseResult.preview?.[0] && Object.keys(parseResult.preview[0])
+                      .filter(k => !['sales_type'].includes(k))
+                      .slice(0, 8)
+                      .map(h => (
+                        <th key={h} style={{
+                          textAlign: 'left', padding: '6px 10px',
+                          color: 'var(--text-muted)', fontWeight: 600, whiteSpace: 'nowrap',
+                        }}>{h}</th>
+                      ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {parseResult.preview?.map((row,i)=>(
-                    <tr key={i} style={{borderBottom:'1px solid var(--border)'}}
-                      onMouseEnter={e=>e.currentTarget.style.background='var(--bg-hover)'}
-                      onMouseLeave={e=>e.currentTarget.style.background=''}>
-                      {Object.values(row).slice(0,8).map((v,j)=><td key={j} style={{padding:'7px 10px',color:'var(--text-primary)',whiteSpace:'nowrap',maxWidth:160,overflow:'hidden',textOverflow:'ellipsis'}}>{String(v||'')}</td>)}
+                  {parseResult.preview?.map((row, i) => (
+                    <tr
+                      key={i}
+                      style={{ borderBottom: '1px solid var(--border)' }}
+                      onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-hover)'}
+                      onMouseLeave={e => e.currentTarget.style.background = ''}
+                    >
+                      {Object.entries(row)
+                        .filter(([k]) => !['sales_type'].includes(k))
+                        .slice(0, 8)
+                        .map(([k, v], j) => (
+                          <td key={j} style={{
+                            padding: '7px 10px', color: 'var(--text-primary)',
+                            whiteSpace: 'nowrap', maxWidth: 160,
+                            overflow: 'hidden', textOverflow: 'ellipsis',
+                          }}>
+                            {String(v || '')}
+                          </td>
+                        ))}
                     </tr>
                   ))}
                 </tbody>
@@ -314,38 +502,77 @@ export default function ImportPage() {
             </div>
           </Card>
 
+          {/* Monthly-import info banner */}
           {importType === 'sales_by_month' && parseResult.monthYear && (
-            <div style={{background:'var(--accent-bg)',border:'1px solid var(--accent-border)',borderRadius:12,padding:'10px 14px',fontSize:12}}>
-              <span style={{color:'var(--text-muted)'}}>Detected month: </span>
-              <span style={{color:'var(--accent)',fontWeight:700}}>{parseResult.monthYear}</span>
-              <span style={{color:'var(--text-muted)'}}> — {parseResult.totalRows} sales records will be imported</span>
-              <span style={{color:'var(--warning)',marginLeft:8,fontWeight:600}}>
+            <div style={{
+              background: 'var(--accent-bg)', border: '1px solid var(--accent-border)',
+              borderRadius: 12, padding: '10px 14px', fontSize: 12,
+            }}>
+              <span style={{ color: 'var(--text-muted)' }}>Detected month: </span>
+              <span style={{ color: 'var(--accent)', fontWeight: 700 }}>{parseResult.monthYear}</span>
+              <span style={{ color: 'var(--text-muted)' }}>
+                {' '}— {parseResult.totalRows} product records will be imported
+              </span>
+              <span style={{ color: 'var(--warning)', marginLeft: 8, fontWeight: 600 }}>
                 ⚠ Existing records for this month will be replaced
               </span>
             </div>
           )}
 
-          <div style={{display:'flex',gap:10,alignItems:'center'}}>
-            <Button icon={importing?null:ArrowRight} onClick={handleImport} disabled={importing}>
+          {importType === 'sales_by_month' && !parseResult.monthYear && (
+            <div style={{
+              background: 'var(--warning-bg)', border: '1px solid rgba(245,158,11,.25)',
+              borderRadius: 12, padding: '10px 14px', fontSize: 12,
+            }}>
+              <AlertCircle size={13} style={{ color: 'var(--warning)', marginRight: 6, verticalAlign: 'middle' }} />
+              <span style={{ color: 'var(--warning)', fontWeight: 700 }}>Month not detected</span>
+              <span style={{ color: 'var(--text-secondary)', marginLeft: 6 }}>
+                Make sure the sheet contains a month/year header (e.g. "MARCH-25" or "MARCH 2025").
+              </span>
+            </div>
+          )}
+
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            <Button
+              icon={importing ? null : ArrowRight}
+              onClick={handleImport}
+              disabled={importing}
+            >
               {importing ? 'Importing…' : `Import ${parseResult.totalRows} Records`}
             </Button>
-            <Button variant="ghost" onClick={()=>setStep(1)}>← Back</Button>
+            <Button variant="ghost" onClick={() => setStep(1)}>← Back</Button>
           </div>
         </div>
       )}
 
-      {/* Step 3: Success */}
-      {step===3 && importResult && (
-        <div style={{maxWidth:480}}>
-          <Card style={{textAlign:'center',padding:40}}>
-            <div style={{width:72,height:72,background:'var(--success-bg)',border:'1px solid rgba(16,185,129,.2)',borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 16px'}}>
-              <CheckCircle2 size={32} style={{color:'var(--success)'}}/>
+      {/* ── Step 3: Success ────────────────────────────────────────────────── */}
+      {step === 3 && importResult && (
+        <div style={{ maxWidth: 480 }}>
+          <Card style={{ textAlign: 'center', padding: 40 }}>
+            <div style={{
+              width: 72, height: 72,
+              background: 'var(--success-bg)',
+              border: '1px solid rgba(16,185,129,.2)',
+              borderRadius: '50%',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              margin: '0 auto 16px',
+            }}>
+              <CheckCircle2 size={32} style={{ color: 'var(--success)' }} />
             </div>
-            <h2 style={{fontSize:20,fontWeight:700,color:'var(--text-primary)',marginBottom:8}}>Import Successful!</h2>
-            <p style={{color:'var(--text-secondary)',marginBottom:6}}>
-              <span style={{fontSize:24,fontFamily:'monospace',fontWeight:700,color:'var(--accent)'}}>{(importResult.inserted||importResult.upserted||0).toLocaleString()}</span>
+            <h2 style={{ fontSize: 20, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 8 }}>
+              Import Successful!
+            </h2>
+            <p style={{ color: 'var(--text-secondary)', marginBottom: 6 }}>
+              <span style={{
+                fontSize: 24, fontFamily: 'monospace',
+                fontWeight: 700, color: 'var(--accent)',
+              }}>
+                {(importResult.inserted || importResult.upserted || 0).toLocaleString()}
+              </span>
             </p>
-            <p style={{fontSize:13,color:'var(--text-muted)',marginBottom:24}}>sales records added to database</p>
+            <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 24 }}>
+              records added/updated in database
+            </p>
             <Button icon={Upload} onClick={reset}>Import Another File</Button>
           </Card>
         </div>
