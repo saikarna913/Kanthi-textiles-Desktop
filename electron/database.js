@@ -398,6 +398,11 @@ module.exports = function createDatabase(appDataPath) {
     return { success: true, deleted: info.changes };
   }
 
+  function deleteAllSales() {
+    const info = db.prepare(`DELETE FROM sales`).run();
+    return { success: true, deleted: info.changes };
+  }
+
   // ── Analytics ─────────────────────────────────────────────────────────────
   function getCategoryAnalysis(params) {
     const { salesType } = params || {};
@@ -952,5 +957,6 @@ module.exports = function createDatabase(appDataPath) {
     getInventoryTransactions, getInventoryCategories, importStockRegister,
     createDynamicTable, getDynamicTables, getDynamicTableData, insertDynamicRow,
     deleteDynamicRow, deleteDynamicTable, runRawQuery, getSeedStatus, seedDemoData,
+    deleteAllSales,
   };
 };

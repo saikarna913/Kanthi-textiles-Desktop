@@ -8,10 +8,10 @@ import logo from '../../assets/app-logo.png';
 const NAV = [
   { path:'/dashboard', label:'Dashboard', icon:LayoutDashboard },
   { path:'/sales', label:'Sales', icon:ShoppingCart },
+  { path:'/import', label:'Import Data', icon:Upload },
   { path:'/customers', label:'Customers', icon:Users },
   { path:'/inventory', label:'Inventory', icon:Package },
   { path:'/analytics', label:'Analytics', icon:BarChart2 },
-  { path:'/import', label:'Import Data', icon:Upload },
   { path:'/manual-entry', label:'Add / Edit', icon:PenLine },
   { path:'/tables', label:'Custom Tables', icon:Table2 },
   { path:'/ai-insights', label:'AI Insights', icon:Sparkles },

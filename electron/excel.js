@@ -1,6 +1,30 @@
 const XLSX = require('xlsx');
 const path = require('path');
 
+// Robust number parser: strip currency symbols, thousands separators, handle
+// parentheses for negatives and non-breaking spaces. Returns NaN when unparsable.
+function parseNumber(v) {
+  if (v === undefined || v === null || v === '') return NaN;
+  let s = String(v).trim();
+  // handle (1,234.56) as negative
+  let neg = false;
+  if (/^\(.*\)$/.test(s)) { neg = true; s = s.replace(/^\(|\)$/g, ''); }
+  // normalize common separators and symbols
+  s = s.replace(/[,\s\u00A0]/g, ''); // remove commas and spaces (including NBSP)
+  s = s.replace(/₹|Rs\.?|INR/ig, '');
+  // remove any non-digit except dot and minus
+  s = s.replace(/[^0-9.\-]/g, '');
+  // if multiple dots, collapse extras (keep last as decimal)
+  const dots = (s.match(/\./g) || []).length;
+  if (dots > 1) {
+    const parts = s.split('.');
+    const dec = parts.pop();
+    s = parts.join('') + '.' + dec;
+  }
+  const n = parseFloat(s);
+  if (isNaN(n)) return NaN;
+  return neg ? -Math.abs(n) : n;
+}
 function parseFile(filePath) {
   try {
     const wb = XLSX.readFile(filePath, { dateNF:'YYYY-MM-DD', cellDates:true, raw:false });
@@ -25,7 +49,12 @@ function parseFile(filePath) {
       }
       if (out.date) { const d = new Date(out.date); if (!isNaN(d)) out.date = d.toISOString().split('T')[0]; }
       ['quantity','unit_price','discount','total_amount','cost_price','profit'].forEach(f => {
-        if (out[f] !== undefined) out[f] = parseFloat(String(out[f]).replace(/[₹,\s]/g,''))||0;
+        if (out[f] !== undefined) {
+          // preserve raw value and parse to number robustly
+          out[`raw_${f}`] = out[f];
+          const parsed = parseNumber(out[f]);
+          out[f] = isNaN(parsed) ? 0 : parsed;
+        }
       });
       if (!out.total_amount && out.unit_price && out.quantity) out.total_amount = (out.unit_price-(out.discount||0))*out.quantity;
       return out;
@@ -107,8 +136,7 @@ function parseSalesByMonth(filePath) {
         const sno = cols[0];
         const itemName = cols[1] || cols[0];
         const total = cols[2] !== undefined ? cols[2] : '';
-
-        const totalValue = parseFloat(String(total).replace(/[,₹\s]/g,''));
+        const totalValue = parseNumber(total);
         if (!sno && itemName && (total === '' || isNaN(totalValue))) {
           currentCategory = itemName.trim();
           continue;
@@ -131,6 +159,7 @@ function parseSalesByMonth(filePath) {
               category: currentCategory,
               total_amount: mappedValue,
               quantity: mappedValue,
+              raw_total: cols[2],
               customer_name: '',
               payment_mode: 'Cash',
             });

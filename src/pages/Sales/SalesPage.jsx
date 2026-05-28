@@ -255,6 +255,46 @@ function TransactionTab() {
               Delete {selectedIds.size} selected
             </Button>
           )}
+          {(search || category || dateFrom || dateTo) && (
+            <Button variant="danger" size="sm" onClick={async () => {
+              if (!window.confirm('Delete ALL filtered monthly rows? This cannot be undone.')) return;
+              toast.loading('Deleting filtered rows...', { id: 'clr' });
+              const r = await window.electron.db.deleteSalesByFilter({ search, category, dateFrom, dateTo, salesType: 'sales_by_month' });
+              toast.dismiss('clr');
+              if (r?.success) { toast.success(`Deleted ${r.deleted} filtered rows`); setSelectedIds(new Set()); load(); }
+              else toast.error(r?.error || 'Failed to delete filtered rows');
+            }}>Clear Filtered</Button>
+          )}
+          {total > 0 && (
+            <Button variant="danger" size="sm" onClick={async () => {
+              if (!window.confirm('Delete ALL monthly sales records? This is irreversible.')) return;
+              toast.loading('Deleting all monthly sales...', { id: 'clrall' });
+              const r = await window.electron.db.deleteSalesByFilter({ salesType: 'sales_by_month' });
+              toast.dismiss('clrall');
+              if (r?.success) { toast.success(`Deleted ${r.deleted} records`); setSelectedIds(new Set()); setPage(1); load(); }
+              else toast.error(r?.error || 'Failed to delete all');
+            }}>Clear All</Button>
+          )}
+          {hasFilter && (
+            <Button variant="danger" size="sm" onClick={async () => {
+              if (!window.confirm('Delete ALL filtered rows? This cannot be undone.')) return;
+              toast.loading('Deleting filtered rows...', { id: 'clr' });
+              const r = await window.electron.db.deleteSalesByFilter({ search, category, region, dateFrom, dateTo, customerName, salesType: 'sales' });
+              toast.dismiss('clr');
+              if (r?.success) { toast.success(`Deleted ${r.deleted} filtered rows`); setSelectedIds(new Set()); load(); }
+              else toast.error(r?.error || 'Failed to delete filtered rows');
+            }}>Clear Filtered</Button>
+          )}
+          {total > 0 && (
+            <Button variant="danger" size="sm" onClick={async () => {
+              if (!window.confirm('Delete ALL sales records? This is irreversible.')) return;
+              toast.loading('Deleting all sales...', { id: 'clrall' });
+              const r = await window.electron.db.deleteAllSales();
+              toast.dismiss('clrall');
+              if (r?.success) { toast.success(`Deleted ${r.deleted} records`); setSelectedIds(new Set()); setPage(1); load(); }
+              else toast.error(r?.error || 'Failed to delete all');
+            }}>Clear All</Button>
+          )}
           <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 4 }}>
             {total.toLocaleString()} transactions
           </span>
